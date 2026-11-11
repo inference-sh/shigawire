@@ -193,6 +193,7 @@ func TestLoadErrors(t *testing.T) {
 		{"steps:\n  - name: s\n    tasks:\n      - test.cmd: {cmd: [x]}\n        notify: nope\n", `p.yml:5:17: notify "nope": no handler of that name`},
 		{"steps:\n  - name: s\n    tasks:\n      - test.cmd: {cmd: [x]}\n        when: r.rc == 0\n", `p.yml:5:15: when: "r.rc": no task before this one registers "r"`},
 		{"steps:\n  - name: s\n    tasks:\n      - test.cmd: {cmd: [x]}\n        when: os.kernel == 6\n", `unknown fact "os.kernel"`},
+		{"steps:\n  - name: s\n    tasks:\n      - test.cmd: {cmd: [x]}\n        needs: r\n        register: r\n", `p.yml:5:16: needs "r": no task before this one registers it`},
 		{"vars: {X: 1}\nsteps:\n  - name: s\n    tasks:\n      - test.cmd: {cmd: [x]}\n        when: ${X} >= 2\n", `p.yml:6:15: when: ">=": want ==, != or contains`},
 		{"vars: {ENV: prod}\nsteps:\n  - name: s\n    tasks:\n      - test.cmd: {cmd: [x]}\n        when: ${ENV}==dev\n", `put spaces around ==`},
 		{"vars: {ENV: prod}\nsteps:\n  - name: s\n    tasks:\n      - test.cmd: {cmd: [x]}\n        when: not ${ENV}!=dev\n", `put spaces around !=`},

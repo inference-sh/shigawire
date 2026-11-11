@@ -341,7 +341,7 @@ func (l *loader) register(v *yaml.Node) (*record, error) {
 }
 
 // taskKeys are the keys a task has beside its module.
-var taskKeys = []string{"name", "notify", "when", "register", "ignore_errors"}
+var taskKeys = []string{"name", "notify", "when", "register", "needs", "ignore_errors"}
 
 // handlerKeys are the keys a handler has beside its module.
 var handlerKeys = []string{"name", "needs", "when"}
@@ -445,6 +445,12 @@ func (l *loader) task(s *stepDef, n *yaml.Node, stepConds []*cond) (host.Task, e
 		}
 	}
 	conds = append(slices.Clip(stepConds), conds...)
+	needs, err := l.taskNeeds(p.keys["needs"])
+	if err != nil {
+		if err := l.fail(err); err != nil {
+			return t, err
+		}
+	}
 	var rec *record
 	if v := p.keys["register"]; v != nil {
 		if rec, err = l.register(v); err != nil {
@@ -473,6 +479,9 @@ func (l *loader) task(s *stepDef, n *yaml.Node, stepConds []*cond) (host.Task, e
 				return t, err
 			}
 			r = notBuilt(p.modKey.Value)
+		}
+		if len(needs) > 0 {
+			r = &needing{Resource: r, needs: needs}
 		}
 		r = l.when(conds, r)
 	}
@@ -505,6 +514,26 @@ func (l *loader) task(s *stepDef, n *yaml.Node, stepConds []*cond) (host.Task, e
 		}
 	}
 	return t, nil
+}
+
+// taskNeeds reads a task's needs: names earlier tasks register.
+func (l *loader) taskNeeds(v *yaml.Node) ([]need, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var names []string
+	if err := scalars(l.file, v, &names); err != nil {
+		return nil, err
+	}
+	var out []need
+	for _, n := range names {
+		rec := l.registered[n]
+		if rec == nil {
+			return nil, errAt(l.file, v, "needs %q: no task before this one registers it", n)
+		}
+		out = append(out, need{n, rec})
+	}
+	return out, nil
 }
 
 // handler makes hd's handler, once, and those it needs.

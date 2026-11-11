@@ -131,7 +131,9 @@ func TestSwarm(t *testing.T) {
 		}
 		return host.Output{}
 	}
-	hosttest.Converge(t, build(t, env, "docker_swarm", map[string]any{"advertise_addr": "10.0.0.1"}), host.Changed)
+	if r := hosttest.Converge(t, build(t, env, "docker_swarm", map[string]any{"advertise_addr": "10.0.0.1"}), host.Changed); r.Msg != "swarm inactive: init" {
+		t.Fatalf("%q: want what is wrong and what apply does", r.Msg)
+	}
 	if got := h.Exec.Ran("docker swarm"); len(got) != 1 || got[0] != "docker swarm init --advertise-addr 10.0.0.1" {
 		t.Fatal(got)
 	}
@@ -143,6 +145,10 @@ func TestSwarm(t *testing.T) {
 		got, err := play(hosttest.Apply, host.Task{Resource: join})
 		if err == nil || got[0].Status != host.Failed || !strings.Contains(got[0].Msg, st) {
 			t.Fatal(st, hosttest.Statuses(got), err)
+		}
+		// No task before it unlocks a swarm: plan stops on it.
+		if got, _ := play(hosttest.Plan, host.Task{Resource: join}); got[0].Status != host.Unknown || !host.IsRefusal(got[0].Err) {
+			t.Fatal(st, hosttest.Statuses(got), got[0].Err)
 		}
 	}
 	// A join that fails says so without the token.

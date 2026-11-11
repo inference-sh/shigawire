@@ -36,7 +36,8 @@ type Report struct {
 //     that is a new empty directory;
 //   - an undefined variable, unless opt.AllowUndefined;
 //   - a when that does not parse;
-//   - a notify or needs naming no handler;
+//   - a notify or a handler's needs naming no handler, a task's needs
+//     naming no earlier registered task;
 //   - a relative src missing from the playbook's files/ directory.
 //
 // Every step is checked, the manual ones too: opt.Only is ignored, and

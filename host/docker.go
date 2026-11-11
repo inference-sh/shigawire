@@ -27,8 +27,8 @@ func SwarmState(ctx context.Context, x Exec) (string, error) {
 // Swarm is the Docker node in a swarm: one it inits (a manager of a new
 // swarm), or one it joins with JoinToken at RemoteAddrs. An active node is
 // in place, whichever swarm it is in; an inactive one inits or joins. A
-// node pending, in error or locked is an error: what to do then is the
-// operator's call.
+// node pending, in error or locked is a Refusal: what to do then is the
+// operator's call, and no task before this one changes it.
 type Swarm struct {
 	Exec Exec
 	// Join: join a swarm; else init one.
@@ -64,15 +64,15 @@ func (s *Swarm) Check(ctx context.Context) (State, error) {
 		return inPlace()
 	case "inactive":
 		if s.Join {
-			return drift("join")
+			return drift("swarm inactive: join")
 		}
-		return drift("init")
+		return drift("swarm inactive: init")
 	case "pending":
-		return State{}, errors.New("the node is pending: it is joining a swarm whose managers it has not reached; docker swarm leave to give up")
+		return State{}, Refusal(errors.New("the node is pending: it is joining a swarm whose managers it has not reached; docker swarm leave to give up"))
 	case "error", "locked":
-		return State{}, fmt.Errorf("the node's swarm state is %s: docker swarm unlock, or leave it, by hand", st)
+		return State{}, Refusal(fmt.Errorf("the node's swarm state is %s: docker swarm unlock, or leave it, by hand", st))
 	}
-	return State{}, fmt.Errorf("the node's swarm state is %q", st)
+	return State{}, Refusal(fmt.Errorf("the node's swarm state is %q", st))
 }
 
 func (s *Swarm) Apply(ctx context.Context, st State) (Result, error) {

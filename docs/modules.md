@@ -372,8 +372,12 @@ leaves the old file.
 
 A command for what no other module models (an installer, a one-time
 init). Without a guard it is an action: it runs every time and reports
-changed. A guard says when it has run already. `shell` is another name
-for `command`; both run a string through `/bin/sh -c`.
+changed. A guard says when it has run already, and its drift says what
+the guard found: `no /usr/bin/docker` (`creates`), `/opt/x exists`
+(`removes`), or the last line `unless` printed, else its exit code. An
+`unless` that prints what is wrong (`echo "swarm $st: init"; exit 1`)
+makes the plan read that way. `shell` is another name for `command`; both
+run a string through `/bin/sh -c`.
 
 | key | type | |
 |---|---|---|
@@ -426,10 +430,13 @@ with a `command` first.
 
 The Docker node in a swarm. It reads `docker info`'s
 `Swarm.LocalNodeState`: `active` is in place, whichever swarm the node is
-in; `inactive` runs `docker swarm init` or `docker swarm join`; `pending`,
-`error` and `locked` are errors left to the operator. After init or join
-the state is read again and must be `active`. The join token is not in
-messages.
+in; `inactive` is drift (`swarm inactive: init`) and runs
+`docker swarm init` or `docker swarm join`; `pending`, `error` and
+`locked` are refusals left to the operator: apply fails there and plan
+exits 1. After init or join the state is read again and must be `active`.
+The join token is not in messages. A task that needs the swarm (a
+network) takes `needs` on the swarm task's `register` name, so a locked
+swarm does not make it report drift of its own.
 
 | key | type | |
 |---|---|---|

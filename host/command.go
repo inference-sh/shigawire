@@ -11,7 +11,10 @@ import (
 // Command is a command that puts something in place a resource here does
 // not model (an installer, mdadm --create, update-initramfs). Without a
 // guard it is an action: it runs every time and reports changed. A guard
-// says when it is in place already.
+// says when it is in place already, and its drift says what the guard
+// found: "no /usr/bin/docker" (Creates), "/opt/x exists" (Removes), or
+// the last line Unless printed ("swarm inactive: init"), else its exit
+// code.
 type Command struct {
 	Exec Exec
 	Cmd  Cmd
@@ -45,13 +48,23 @@ func (c *Command) Check(ctx context.Context) (State, error) {
 			return State{InPlace: err == nil}, err
 		}
 	}
-	if c.Unless != nil && c.Exec.Run(Aside(ctx), *c.Unless).OK() {
-		return inPlace()
+	if c.Unless != nil {
+		o := c.Exec.Run(Aside(ctx), *c.Unless)
+		if o.OK() {
+			return inPlace()
+		}
+		if said := LastLines(o.Out, 1); said != "" {
+			return drift("%s", said)
+		}
+		return drift("%s exited %d", c.Unless.Name, o.Code)
 	}
-	if c.Creates == "" && c.Removes == "" && c.Unless == nil {
-		return action("run %s", c.Cmd.Name)
+	switch {
+	case c.Creates != "":
+		return drift("no %s", c.Creates)
+	case c.Removes != "":
+		return drift("%s exists", c.Removes)
 	}
-	return drift("run %s", c.Cmd.Name)
+	return action("run %s", c.Cmd.Name)
 }
 
 func (c *Command) Apply(ctx context.Context, _ State) (Result, error) {

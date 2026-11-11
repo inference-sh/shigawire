@@ -27,8 +27,11 @@ func TestCommand_Guards(t *testing.T) {
 	os.WriteFile(there, nil, 0o644)
 	gone := filepath.Join(dir, "nvidia-uninstall")
 	ex := &fakeExec{respond: func(line string) Output {
-		if line == "grep -q x f" {
+		switch line {
+		case "grep -q x f":
 			return exit(0)
+		case "sh swarm":
+			return Output{Out: "inactive\nswarm inactive: init\n", Code: 1}
 		}
 		return exit(1)
 	}}
@@ -42,14 +45,16 @@ func TestCommand_Guards(t *testing.T) {
 			t.Errorf("%s: %+v %v", name, st, err)
 		}
 	}
-	for name, c := range map[string]*Command{
-		"creates": {Creates: gone},
-		"removes": {Removes: there},
-		"unless":  {Unless: &Cmd{Name: "false"}},
+	// The drift says what the guard found.
+	for want, c := range map[string]*Command{
+		"no " + gone:           {Creates: gone},
+		there + " exists":      {Removes: there},
+		"false exited 1":       {Unless: &Cmd{Name: "false"}},
+		"swarm inactive: init": {Unless: &Cmd{Name: "sh", Args: []string{"swarm"}}},
 	} {
 		c.Exec, c.Cmd = ex, Cmd{Name: "mdadm"}
-		if st, err := c.Check(context.Background()); err != nil || st.InPlace || st.Drift != "run mdadm" {
-			t.Errorf("%s: %+v %v", name, st, err)
+		if st, err := c.Check(context.Background()); err != nil || st.InPlace || st.Drift != want {
+			t.Errorf("%s: %+v %v", want, st, err)
 		}
 	}
 	if len(ex.ran("mdadm")) != 0 {
