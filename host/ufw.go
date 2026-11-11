@@ -90,6 +90,9 @@ func (u *UFW) Validate() error {
 			return fmt.Errorf("ufw default %s %q: want allow, deny or reject", d, p)
 		}
 	}
+	// Two listed rules ufw keeps as one, or an Absent rule that deletes a
+	// listed one, undo each other every run. An Absent rule that deletes
+	// another action is fine: it goes before the listed rule is added.
 	tuples := make([]ufwrule.Tuple, len(u.Rules))
 	for i, r := range u.Rules {
 		v4, v6, err := r.Tuples(true)
@@ -97,21 +100,19 @@ func (u *UFW) Validate() error {
 			return fmt.Errorf("ufw rule %d: %w", i+1, err)
 		}
 		tuples[i] = ufwrule.Parse(cmp.Or(v4, v6))
-	}
-	// Two listed rules ufw keeps as one, or an Absent rule that deletes a
-	// listed one, undo each other every run. An Absent rule that deletes
-	// another action is fine: it goes before the listed rule is added.
-	for i, r := range u.Rules {
 		for j := range i {
-			a, b := u.Rules[j], r
-			ta, tb := tuples[j], tuples[i]
-			switch {
-			case !a.Absent && !b.Absent && ta.Key == tb.Key:
-				return fmt.Errorf("ufw rules %d and %d are one rule to ufw (they differ only in action or comment)", j+1, i+1)
-			case a.Absent && !b.Absent && ta.Deletes(tb):
-				return fmt.Errorf("ufw rule %d deletes rule %d", j+1, i+1)
-			case !a.Absent && b.Absent && tb.Deletes(ta):
-				return fmt.Errorf("ufw rule %d deletes rule %d", i+1, j+1)
+			if u.Rules[j].Absent == r.Absent {
+				if !r.Absent && tuples[j].Key == tuples[i].Key {
+					return fmt.Errorf("ufw rules %d and %d are one rule to ufw (they differ only in action or comment)", j+1, i+1)
+				}
+				continue
+			}
+			absent, listed := j, i
+			if r.Absent {
+				absent, listed = i, j
+			}
+			if tuples[absent].Deletes(tuples[listed]) {
+				return fmt.Errorf("ufw rule %d deletes rule %d", absent+1, listed+1)
 			}
 		}
 	}
