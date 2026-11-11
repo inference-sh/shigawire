@@ -14,7 +14,7 @@ import (
 // says when it is in place already, and its drift says what the guard
 // found: "no /usr/bin/docker" (Creates), "/opt/x exists" (Removes), or
 // the last line Unless printed ("swarm inactive: init"), else its exit
-// code.
+// code ("unless: exit 1").
 type Command struct {
 	Exec Exec
 	Cmd  Cmd
@@ -56,7 +56,7 @@ func (c *Command) Check(ctx context.Context) (State, error) {
 		if said := LastLines(o.Out, 1); said != "" {
 			return drift("%s", said)
 		}
-		return drift("%s exited %d", c.Unless.Name, o.Code)
+		return drift("unless: exit %d", o.Code)
 	}
 	switch {
 	case c.Creates != "":

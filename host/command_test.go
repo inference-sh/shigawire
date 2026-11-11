@@ -49,7 +49,7 @@ func TestCommand_Guards(t *testing.T) {
 	for want, c := range map[string]*Command{
 		"no " + gone:           {Creates: gone},
 		there + " exists":      {Removes: there},
-		"false exited 1":       {Unless: &Cmd{Name: "false"}},
+		"unless: exit 1":       {Unless: &Cmd{Name: "/bin/sh", Args: []string{"-c", "false"}}},
 		"swarm inactive: init": {Unless: &Cmd{Name: "sh", Args: []string{"swarm"}}},
 	} {
 		c.Exec, c.Cmd = ex, Cmd{Name: "mdadm"}
