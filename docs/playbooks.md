@@ -82,7 +82,7 @@ module's arguments (a mapping, or nothing), and these keys:
 | `when`          | A condition, or a list of conditions that must all hold. |
 | `register`      | A name under which later conditions read what the task did. |
 | `needs`         | A registered name or a list of them: earlier tasks this one depends on. When one of them failed in this run, this one is not checked: `plan` and `verify` report it `unknown` (`not checked: it needs swarm, which failed`), not a drift read from a host that task left as it was, and `apply` fails it. |
-| `ignore_errors` | `true`: a failure is reported `ignored` and the play goes on. |
+| `ignore_errors` | `true`: a failure is reported `ignored` and the play goes on, in `plan` and `verify` too. |
 
 A key that is none of these is taken as the module; a second one is an
 error. A module argument the module does not take is an error that names
@@ -299,7 +299,7 @@ apply: 1 ok, 2 changed, 1 skipped
 | `ok` | In place; nothing done. |
 | `changed` | Changed (apply), would change (plan), or drifted (verify). |
 | `failed` | The check or apply failed. In `verify`, a check that ran and found the host wrong (an `assert` that does not hold). |
-| `ignored` | Failed, with `ignore_errors: true`; the play went on. |
+| `ignored` | Failed, with `ignore_errors: true`; the play went on. In plan and verify, a check that failed in such a task: it neither blocks a plan nor fails verify. |
 | `warn` | The module reported a warning; the play went on. |
 | `unknown` | In plan or verify, the check failed, so whether it is in place is not known: it could not read what it reads (a file's owner with no such user yet, ufw not installed). In plan, also an `assert` that does not hold, which a change planned before it may make pass. |
 | `skipped` | Its `when` was false. |
