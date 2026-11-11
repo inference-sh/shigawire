@@ -463,57 +463,75 @@ func (l *loader) task(s *stepDef, n *yaml.Node, stepConds []*cond) (host.Task, e
 	if rec != nil && env.Exec != nil {
 		env.Exec = recordExec{Exec: env.Exec, rec: rec}
 	}
-	var r host.Resource
-	if why := constFalse(conds); why != "" {
-		r = unbuilt(p, why)
-		if l.chk != nil {
-			// Its arguments may use variables left empty for it, but its
-			// module must exist.
-			if _, ok := l.reg.Lookup(p.modKey.Value); !ok {
-				l.chk.add(l.unknownModule(p))
-			}
-		}
-	} else {
-		if r, err = l.resource(p, env); err != nil {
-			if err := l.fail(err); err != nil {
-				return t, err
-			}
-			r = notBuilt(p.modKey.Value)
-		}
-		if len(needs) > 0 {
-			r = &needing{Resource: r, needs: needs}
-		}
-		r = l.when(conds, r)
+	r, err := l.build(p, env, conds, needs)
+	if err != nil {
+		return t, err
 	}
 	if rec != nil {
 		r = &registered{Resource: r, rec: rec}
 	}
 	t.Resource = r
 	t.Name = s.name + ": " + cmp.Or(name, r.ID())
-	if v := p.keys["notify"]; v != nil {
-		var names []string
-		if err := scalars(l.file, v, &names); err != nil {
-			return t, err
-		}
-		for _, hn := range names {
-			hd := l.handlers[hn]
-			if hd == nil {
-				if err := l.fail(errAt(l.file, v, "notify %q: no handler of that name", hn)); err != nil {
-					return t, err
-				}
-				continue
-			}
-			h, err := l.handler(hd)
-			if err != nil {
-				if err := l.fail(err); err != nil {
-					return t, err
-				}
-				continue
-			}
-			t.Notify = append(t.Notify, h)
-		}
+	t.Notify, err = l.handlerRefs(p.keys["notify"], "notify")
+	return t, err
+}
+
+// handlerRefs are the handlers v names (a task's notify, a handler's
+// needs), each built; what is the key, for the messages.
+func (l *loader) handlerRefs(v *yaml.Node, what string) ([]*host.Handler, error) {
+	if v == nil {
+		return nil, nil
 	}
-	return t, nil
+	var names []string
+	if err := scalars(l.file, v, &names); err != nil {
+		return nil, err
+	}
+	var out []*host.Handler
+	for _, n := range names {
+		hd := l.handlers[n]
+		if hd == nil {
+			if err := l.fail(errAt(l.file, v, "%s %q: no handler of that name", what, n)); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		h, err := l.handler(hd)
+		if err != nil {
+			if err := l.fail(err); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		out = append(out, h)
+	}
+	return out, nil
+}
+
+// build makes p's resource with env, under conds. When a condition is
+// false at load time (constFalse) its module is not made, only looked up
+// for check: its arguments may use variables left empty for it. A module
+// that fails is notBuilt (check goes on past it). needs wrap it before
+// the conditions.
+func (l *loader) build(p *parsed, env module.Env, conds []*cond, needs []need) (host.Resource, error) {
+	if why := constFalse(conds); why != "" {
+		if l.chk != nil {
+			if _, ok := l.reg.Lookup(p.modKey.Value); !ok {
+				l.chk.add(l.unknownModule(p))
+			}
+		}
+		return unbuilt(p, why), nil
+	}
+	r, err := l.resource(p, env)
+	if err != nil {
+		if err := l.fail(err); err != nil {
+			return nil, err
+		}
+		r = notBuilt(p.modKey.Value)
+	}
+	if len(needs) > 0 {
+		r = &needing{Resource: r, needs: needs}
+	}
+	return l.when(conds, r), nil
 }
 
 // taskNeeds reads a task's needs: names earlier tasks register.
@@ -551,28 +569,8 @@ func (l *loader) handler(hd *handlerDef) (*host.Handler, error) {
 		return nil, err
 	}
 	h := &host.Handler{Name: hd.name}
-	if v := p.keys["needs"]; v != nil {
-		var names []string
-		if err := scalars(l.file, v, &names); err != nil {
-			return nil, err
-		}
-		for _, n := range names {
-			nd := l.handlers[n]
-			if nd == nil {
-				if err := l.fail(errAt(l.file, v, "needs %q: no handler of that name", n)); err != nil {
-					return nil, err
-				}
-				continue
-			}
-			nh, err := l.handler(nd)
-			if err != nil {
-				if err := l.fail(err); err != nil {
-					return nil, err
-				}
-				continue
-			}
-			h.Needs = append(h.Needs, nh)
-		}
+	if h.Needs, err = l.handlerRefs(p.keys["needs"], "needs"); err != nil {
+		return nil, err
 	}
 	// A handler runs only when a task that ran notified it, so its step's
 	// when does not apply to it. Its own when reads variables and facts:
@@ -586,20 +584,8 @@ func (l *loader) handler(hd *handlerDef) (*host.Handler, error) {
 			return nil, err
 		}
 	}
-	if why := constFalse(conds); why != "" {
-		h.Resource = unbuilt(p, why)
-		if _, ok := l.reg.Lookup(p.modKey.Value); !ok && l.chk != nil {
-			l.chk.add(l.unknownModule(p))
-		}
-	} else {
-		r, err := l.resource(p, l.env)
-		if err != nil {
-			if err := l.fail(err); err != nil {
-				return nil, err
-			}
-			r = notBuilt(p.modKey.Value)
-		}
-		h.Resource = l.when(conds, r)
+	if h.Resource, err = l.build(p, l.env, conds, nil); err != nil {
+		return nil, err
 	}
 	hd.built = h
 	return h, nil
