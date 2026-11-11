@@ -36,7 +36,7 @@
 // Commands run through an Exec, so tests stand a fake in for the host:
 // package hosttest has one, and a temporary root to point paths under.
 // The package keeps no global state: each resource is a value that holds
-// what it acts on. It uses only the standard library.
+// what it acts on. Beyond the standard library it uses only x/sys.
 //
 // The resources are for Linux: apt, dpkg and systemd, numeric owners, and
 // commands in process groups. The package builds elsewhere, where an owner
