@@ -1,7 +1,6 @@
 package host
 
 import (
-	"context"
 	"crypto/sha256"
 	"fmt"
 	"net/http"
@@ -44,7 +43,7 @@ func TestDownload_Checksum(t *testing.T) {
 	// Content the sum does not match is never put in place.
 	body = "tampered"
 	os.WriteFile(path, []byte("old"), 0o755)
-	_, err := runPlay(context.Background(), Play{Tasks: []Task{{Resource: d}}})
+	_, err := runMode((*Runner).Run, Play{Tasks: []Task{{Resource: d}}})
 	if err == nil || !strings.Contains(err.Error(), "want "+sum("#!/bin/sh\n")) {
 		t.Fatalf("err %v", err)
 	}
@@ -102,7 +101,7 @@ func TestDownload_HTTPError(t *testing.T) {
 	body := ""
 	url, _ := serve(t, &body)
 	d := &Download{URL: url + "/missing", Path: filepath.Join(t.TempDir(), "x")}
-	if _, err := runPlay(context.Background(), Play{Tasks: []Task{{Resource: d}}}); err == nil || !strings.Contains(err.Error(), "404") {
+	if _, err := runMode((*Runner).Run, Play{Tasks: []Task{{Resource: d}}}); err == nil || !strings.Contains(err.Error(), "404") {
 		t.Fatalf("err %v", err)
 	}
 }

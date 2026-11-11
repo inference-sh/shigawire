@@ -56,13 +56,24 @@ type Outcome struct {
 	// Err is the failed run's error; nil when the second apply ran
 	// cleanly but changed something.
 	Err error
-	// Changed are the tasks and handlers the second apply changed
-	// (actions aside).
-	Changed []string
+	// Changed are the results of the tasks and handlers the second apply
+	// changed (actions aside): why it failed when Err is nil.
+	Changed []host.Result
 }
 
 // OK reports whether the playbook converged.
 func (o *Outcome) OK() bool { return o.Failed == "" }
+
+// Ran reports whether Converge reached the run s.
+func (o *Outcome) Ran(s Stage) bool {
+	switch s {
+	case StageAgain:
+		return o.Failed != StageApply
+	case StageVerify:
+		return o.Failed == "" || o.Failed == StageVerify
+	}
+	return true
+}
 
 // Failure is the failure as one message, with the failed run's results
 // one a line; "" when the playbook converged.
@@ -74,7 +85,11 @@ func (o *Outcome) Failure() string {
 		if o.Err != nil {
 			return fmt.Sprintf("second apply: %v\n%s", o.Err, Lines(o.Again))
 		}
-		return fmt.Sprintf("second apply changed %s: the playbook does not converge\n%s", strings.Join(o.Changed, ", "), Lines(o.Again))
+		names := make([]string, len(o.Changed))
+		for i, r := range o.Changed {
+			names[i] = r.Name
+		}
+		return fmt.Sprintf("second apply changed %s: the playbook does not converge\n%s", strings.Join(names, ", "), Lines(o.Again))
 	case StageVerify:
 		return fmt.Sprintf("verify after apply: %v\n%s", o.Err, Lines(o.Verify))
 	}
@@ -92,35 +107,27 @@ func (o *Outcome) Failure() string {
 func Converge(ctx context.Context, pb *playbook.Playbook) Outcome {
 	var o Outcome
 	var err error
-	if o.Apply, err = Results(ctx, pb.Apply); err != nil {
+	if o.Apply, err = hosttest.Results(ctx, pb.Apply); err != nil {
 		o.Failed, o.Err = StageApply, err
 		return o
 	}
-	if o.Again, err = Results(ctx, pb.Apply); err != nil {
+	if o.Again, err = hosttest.Results(ctx, pb.Apply); err != nil {
 		o.Failed, o.Err = StageAgain, err
 		return o
 	}
 	for _, r := range o.Again {
 		if r.Status == host.Changed && (r.Handler || !r.Action) {
-			o.Changed = append(o.Changed, r.Name)
+			o.Changed = append(o.Changed, r)
 		}
 	}
 	if len(o.Changed) > 0 {
 		o.Failed = StageAgain
 		return o
 	}
-	if o.Verify, err = Results(ctx, pb.Verify); err != nil {
+	if o.Verify, err = hosttest.Results(ctx, pb.Verify); err != nil {
 		o.Failed, o.Err = StageVerify, err
 	}
 	return o
-}
-
-// Results runs f (a Playbook's Apply, Plan or Verify) and returns every
-// result and the run's error.
-func Results(ctx context.Context, f func(context.Context, *host.Runner) error) ([]host.Result, error) {
-	var got []host.Result
-	err := f(ctx, &host.Runner{OnResult: func(r host.Result) { got = append(got, r) }})
-	return got, err
 }
 
 // Lines are the results, one a line, indented.

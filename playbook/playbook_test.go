@@ -116,9 +116,7 @@ func run(t *testing.T, h *hosttest.Host, content string, opt playbook.Options, m
 	if err != nil {
 		t.Fatal(err)
 	}
-	var got []host.Result
-	err = m(pb, context.Background(), &host.Runner{OnResult: func(r host.Result) { got = append(got, r) }})
-	return got, err
+	return hosttest.Results(context.Background(), func(ctx context.Context, r *host.Runner) error { return m(pb, ctx, r) })
 }
 
 var (

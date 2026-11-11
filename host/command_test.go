@@ -94,7 +94,7 @@ func TestCommand_NoChangeAndFailure(t *testing.T) {
 	if r := apply(t, &Command{Exec: ex, Cmd: Cmd{Name: "sh", Args: []string{"nvidia.run", "--check"}}, NoChange: true}); r.Status != OK || r.Msg != "OK" {
 		t.Fatalf("verify: %s %q", r.Status, r.Msg)
 	}
-	_, err := runPlay(context.Background(), Play{Tasks: []Task{{Resource: &Command{Exec: ex, Cmd: Cmd{Name: "sh", Args: []string{"bad"}}}}}})
+	_, err := runMode((*Runner).Run, Play{Tasks: []Task{{Resource: &Command{Exec: ex, Cmd: Cmd{Name: "sh", Args: []string{"bad"}}}}}})
 	if err == nil || !strings.Contains(err.Error(), "exit 2: line 1 | checksum mismatch") {
 		t.Fatalf("err %v", err)
 	}

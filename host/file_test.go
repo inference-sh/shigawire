@@ -155,7 +155,7 @@ func TestAbsent(t *testing.T) {
 	}
 	full := filepath.Join(dir, "full")
 	os.MkdirAll(filepath.Join(full, "x"), 0o755)
-	if _, err := runPlay(context.Background(), Play{Tasks: []Task{{Resource: &Absent{Path: full}}}}); err == nil {
+	if _, err := runMode((*Runner).Run, Play{Tasks: []Task{{Resource: &Absent{Path: full}}}}); err == nil {
 		t.Fatal("removed a directory with something in it")
 	}
 	if r := converge(t, &Absent{Path: full, Recursive: true}, Changed); r.Msg != "removed" {

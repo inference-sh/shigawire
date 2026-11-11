@@ -166,6 +166,12 @@ type Result struct {
 	Handler bool   // a handler, run because a task notified it
 	// Action: Check said the resource is an action (State.Action).
 	Action bool
+	// Blocked: in Plan, an Unknown no change planned before it can
+	// explain, so Run would fail there too: a Refusal, or a Check that
+	// failed with no change planned before it. Another Unknown may read
+	// what an earlier change would put in place (an owner a user task
+	// creates).
+	Blocked bool
 }
 
 // Task is a resource in a play.
@@ -236,7 +242,8 @@ func (r *Runner) Run(ctx context.Context, p Play) error { return r.run(ctx, p, m
 // and changes nothing. A task not in place is reported Changed with its
 // drift (an action: Result.Action, "run" when it says nothing more), and
 // the handlers it notifies are planned in turn, as Run would run them. A
-// Check that fails is Unknown, notifies nothing, and the plan goes on. The error is only
+// Check that fails is Unknown (Result.Blocked when no earlier change can
+// explain it), notifies nothing, and the plan goes on. The error is only
 // for a play that cannot run, or ctx ending.
 func (r *Runner) Plan(ctx context.Context, p Play) error { return r.run(ctx, p, modePlan) }
 
@@ -286,6 +293,8 @@ type playRun struct {
 	failed   map[*Handler]bool
 	// drifted and unknown count Verify's Changed and Unknown.
 	drifted, unknown int
+	// changed: a task or handler reported Changed so far.
+	changed bool
 }
 
 func (r *Runner) run(ctx context.Context, p Play, m mode) error {
@@ -332,6 +341,12 @@ func (r *Runner) run(ctx context.Context, p Play, m mode) error {
 }
 
 func (pr *playRun) report(res Result) Result {
+	if pr.mode == modePlan && res.Status == Unknown && (IsRefusal(res.Err) || !pr.changed) {
+		res.Blocked = true
+	}
+	if res.Status == Changed {
+		pr.changed = true
+	}
 	if pr.mode == modeVerify {
 		switch res.Status {
 		case Changed:

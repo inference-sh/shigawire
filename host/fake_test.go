@@ -43,17 +43,18 @@ func (f *fakeExec) ran(prefix string) []string {
 
 func exit(code int) Output { return Output{Code: code} }
 
-// runPlay runs p and returns every result.
-func runPlay(ctx context.Context, p Play) ([]Result, error) {
+// runMode runs p with m ((*Runner).Run, Plan or Verify) and returns every
+// result. hosttest.Run is the exported form of it.
+func runMode(m func(*Runner, context.Context, Play) error, p Play) ([]Result, error) {
 	var got []Result
-	err := (&Runner{OnResult: func(r Result) { got = append(got, r) }}).Run(ctx, p)
+	err := m(&Runner{OnResult: func(r Result) { got = append(got, r) }}, context.Background(), p)
 	return got, err
 }
 
 // apply runs r as a one-task play and returns its result.
 func apply(t *testing.T, r Resource) Result {
 	t.Helper()
-	res, err := runPlay(context.Background(), Play{Tasks: []Task{{Resource: r}}})
+	res, err := runMode((*Runner).Run, Play{Tasks: []Task{{Resource: r}}})
 	if err != nil {
 		t.Fatalf("%s: %v", r.ID(), err)
 	}

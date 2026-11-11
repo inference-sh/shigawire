@@ -18,9 +18,7 @@ func TestQuery(t *testing.T) {
 	}}
 	q := &Query{Exec: ex, Cmd: Cmd{Name: "grep", Args: []string{"-q", "x", "/etc/f"}}}
 	for _, m := range []func(*Runner, context.Context, Play) error{(*Runner).Run, (*Runner).Plan, (*Runner).Verify} {
-		var got []Result
-		r := &Runner{OnResult: func(x Result) { got = append(got, x) }}
-		if err := m(r, context.Background(), Play{Tasks: []Task{{Resource: q}}}); err != nil || got[0].Status != OK {
+		if got, err := runMode(m, Play{Tasks: []Task{{Resource: q}}}); err != nil || got[0].Status != OK {
 			t.Fatalf("%v %v", got, err)
 		}
 	}

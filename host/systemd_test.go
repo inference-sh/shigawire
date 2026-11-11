@@ -50,7 +50,7 @@ func TestRestartAndDaemonReload(t *testing.T) {
 	if want := []string{"systemctl restart infsh-boxd", "systemctl daemon-reload"}; !slices.Equal(ex.calls, want) {
 		t.Fatalf("ran %v", ex.calls)
 	}
-	res, err := runPlay(context.Background(), Play{Tasks: []Task{{Resource: &Restart{Exec: &fakeExec{respond: func(string) Output { return exit(1) }}, Name: "x"}}}})
+	res, err := runMode((*Runner).Run, Play{Tasks: []Task{{Resource: &Restart{Exec: &fakeExec{respond: func(string) Output { return exit(1) }}, Name: "x"}}}})
 	if err == nil || res[0].Status != Failed || res[0].Msg != "systemctl: exit 1" {
 		t.Fatalf("a failed restart: %v %+v", err, res)
 	}

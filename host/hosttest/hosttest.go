@@ -168,9 +168,15 @@ var (
 // Run runs p with m and returns every result, in the order reported, and
 // the run's error.
 func Run(m Mode, p host.Play) ([]host.Result, error) {
+	return Results(context.Background(), func(ctx context.Context, r *host.Runner) error { return m(r, ctx, p) })
+}
+
+// Results runs f with a Runner (a Playbook's Apply, Plan or Verify, a
+// Mode on a play) and returns every result, in the order reported, and
+// the run's error.
+func Results(ctx context.Context, f func(context.Context, *host.Runner) error) ([]host.Result, error) {
 	var got []host.Result
-	r := &host.Runner{OnResult: func(r host.Result) { got = append(got, r) }}
-	err := m(r, context.Background(), p)
+	err := f(ctx, &host.Runner{OnResult: func(r host.Result) { got = append(got, r) }})
 	return got, err
 }
 
