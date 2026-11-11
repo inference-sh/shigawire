@@ -180,7 +180,14 @@ make test     # vet and tests
 make dist     # static binaries for linux/amd64 and linux/arm64
 ```
 
-Releases: run the Release workflow on `dev` with a bump (patch, minor or major), from the Actions tab or `gh workflow run release.yml -f bump=minor`. It tests, tags the next version, builds the binaries and publishes them with checksums. Pushing a `v*` tag by hand releases that tag the same way.
+Releases: run the Release workflow on `dev` with a bump (patch, minor or major), from the Actions tab or `gh workflow run release.yml -f bump=minor`. It tests, checks the API, tags the next version, builds the binaries and publishes them with checksums. Pushing a `v*` tag by hand releases that tag the same way.
+
+API compatibility: the module's public API (every package but `internal` ones) is compared with the latest `v*` release by [apidiff](https://pkg.go.dev/golang.org/x/exp/cmd/apidiff), pinned in `.github/scripts/apicompat.sh`; `make apicompat` runs it locally. Removing or changing an exported name, field or signature is an incompatible change, and it needs a major release, or a minor one while the version is v0 (v0.1.x to v0.2.0). Patch releases and, from v1, minor releases add API only.
+
+- CI fails on an incompatible change unless `.github/api-next` names the next release and that release is big enough for the change. A version already released in that file is stale and ignored.
+- The Release workflow runs the same check with the version it is about to tag, and stops before tagging when the bump is too small.
+
+Callers outside this repo (the engine) import the packages: a name with no caller here may still have one.
 
 ## License
 
