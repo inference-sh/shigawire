@@ -168,7 +168,8 @@ type Result struct {
 	Action bool
 	// Blocked: in Plan, an Unknown no change planned before it can
 	// explain, so Run would fail there too: a Refusal, or a Check that
-	// failed with no change planned before it. Another Unknown may read
+	// failed with no change planned before it, in a task that does not
+	// ignore errors. Another Unknown may read
 	// what an earlier change would put in place (an owner a user task
 	// creates).
 	Blocked bool
@@ -319,7 +320,7 @@ func (r *Runner) run(ctx context.Context, p Play, m mode) error {
 		if res.Status == Failed && t.IgnoreErrors {
 			res.Status = Ignored
 		}
-		switch pr.report(res).Status {
+		switch pr.report(res, t.IgnoreErrors).Status {
 		case Failed:
 			return errors.Join(fmt.Errorf("%s: %w", res.Name, res.Err), pr.flush(ctx))
 		case Changed:
@@ -340,8 +341,10 @@ func (r *Runner) run(ctx context.Context, p Play, m mode) error {
 	return err
 }
 
-func (pr *playRun) report(res Result) Result {
-	if pr.mode == modePlan && res.Status == Unknown && (IsRefusal(res.Err) || !pr.changed) {
+// report counts res and hands it to OnResult. ignoreErrors: Run goes on
+// past res's failure, so a plan's Unknown there blocks nothing.
+func (pr *playRun) report(res Result, ignoreErrors bool) Result {
+	if pr.mode == modePlan && res.Status == Unknown && !ignoreErrors && (IsRefusal(res.Err) || !pr.changed) {
 		res.Blocked = true
 	}
 	if res.Status == Changed {
@@ -393,7 +396,7 @@ func (pr *playRun) flush(ctx context.Context) error {
 			res = pr.one(ctx, name, h.Resource)
 		}
 		res.Handler = true
-		if pr.report(res).Status == Failed {
+		if pr.report(res, false).Status == Failed {
 			pr.failed[h] = true
 			errs = append(errs, fmt.Errorf("handler %q: %w", name, res.Err))
 		}
