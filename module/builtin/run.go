@@ -1,6 +1,7 @@
 package builtin
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -66,12 +67,8 @@ type commandArgs struct {
 	// Removes: the command has run when this path does not exist.
 	Removes string `yaml:"removes"`
 	// Unless: the command has run when this one exits 0.
-	Unless Cmd `yaml:"unless"`
-	// Chdir is the directory the command runs in; unset is /.
-	Chdir string            `yaml:"chdir"`
-	Env   map[string]string `yaml:"env"`
-	// Timeout kills the command after this long ("10m").
-	Timeout time.Duration `yaml:"timeout"`
+	Unless  Cmd `yaml:"unless"`
+	runArgs `yaml:",inline"`
 	// Watch: the command changed something only when one of these
 	// files' content did.
 	Watch []string `yaml:"watch"`
@@ -82,18 +79,39 @@ type commandArgs struct {
 
 var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
+// runArgs are how a command runs, for the modules that run one.
+type runArgs struct {
+	// Chdir is the directory the command runs in; unset is /.
+	Chdir string            `yaml:"chdir"`
+	Env   map[string]string `yaml:"env"`
+	// Timeout kills the command after this long ("10m").
+	Timeout time.Duration `yaml:"timeout"`
+}
+
+// cmd is c run as r says; def is its timeout when r sets none (0: none).
+func (r runArgs) cmd(c host.Cmd, def time.Duration) (host.Cmd, error) {
+	if r.Chdir != "" {
+		if err := absPath("chdir", r.Chdir); err != nil {
+			return c, err
+		}
+	}
+	if r.Timeout < 0 {
+		return c, fmt.Errorf("timeout %s: want a positive duration", r.Timeout)
+	}
+	env, err := envList(r.Env)
+	if err != nil {
+		return c, err
+	}
+	c.Dir, c.Env, c.Timeout = r.Chdir, env, cmp.Or(r.Timeout, def)
+	return c, nil
+}
+
 func newCommand(env module.Env, a commandArgs) (host.Resource, error) {
 	c, err := a.Cmd.cmd("cmd")
 	if err != nil {
 		return nil, err
 	}
-	if a.Chdir != "" {
-		if err := absPath("chdir", a.Chdir); err != nil {
-			return nil, err
-		}
-	}
-	c.Dir, c.Timeout = a.Chdir, a.Timeout
-	if c.Env, err = envList(a.Env); err != nil {
+	if c, err = a.runArgs.cmd(c, 0); err != nil {
 		return nil, err
 	}
 	r := &host.Command{Exec: env.Exec, Cmd: c}
@@ -148,11 +166,8 @@ func newCompose(env module.Env, a composeArgs) (host.Resource, error) {
 	if err := absPath("project_src", a.ProjectSrc); err != nil {
 		return nil, err
 	}
-	state := a.State
-	if state == "" {
-		state = "present"
-	}
-	if err := oneOf("state", state, "present", "absent"); err != nil {
+	state, err := choice("state", a.State, "present", "absent")
+	if err != nil {
 		return nil, err
 	}
 	return &host.Compose{Exec: env.Exec, Dir: a.ProjectSrc, Files: a.Files, Project: a.ProjectName, Absent: state == "absent"}, nil
@@ -170,11 +185,8 @@ type swarmArgs struct {
 }
 
 func newSwarm(env module.Env, a swarmArgs) (host.Resource, error) {
-	state := a.State
-	if state == "" {
-		state = "init"
-	}
-	if err := oneOf("state", state, "init", "join"); err != nil {
+	state, err := choice("state", a.State, "init", "join")
+	if err != nil {
 		return nil, err
 	}
 	join := state == "join"
@@ -270,7 +282,9 @@ func newAssert(env module.Env, a assertArgs) (host.Resource, error) {
 	if err != nil {
 		return nil, err
 	}
-	c.Timeout = cmpDuration(a.Timeout, time.Minute)
+	if c, err = (runArgs{Timeout: a.Timeout}).cmd(c, time.Minute); err != nil {
+		return nil, err
+	}
 	ck := check{min: a.Min, max: a.Max, warnMin: a.WarnMin, warnMax: a.WarnMax}
 	if a.Regex != "" {
 		if ck.re, err = regexp.Compile(a.Regex); err != nil {
@@ -295,12 +309,9 @@ func newAssert(env module.Env, a assertArgs) (host.Resource, error) {
 
 type queryArgs struct {
 	// Name is the task's resource ID; unset is "query" and the command.
-	Name string `yaml:"name"`
-	Cmd  Cmd    `yaml:"cmd"`
-	// Chdir is the directory the command runs in; unset is /.
-	Chdir   string            `yaml:"chdir"`
-	Env     map[string]string `yaml:"env"`
-	Timeout time.Duration     `yaml:"timeout"`
+	Name    string `yaml:"name"`
+	Cmd     Cmd    `yaml:"cmd"`
+	runArgs `yaml:",inline"`
 }
 
 // newQuery is a read-only command run in every mode, for register.
@@ -309,13 +320,7 @@ func newQuery(env module.Env, a queryArgs) (host.Resource, error) {
 	if err != nil {
 		return nil, err
 	}
-	if a.Chdir != "" {
-		if err := absPath("chdir", a.Chdir); err != nil {
-			return nil, err
-		}
-	}
-	c.Dir, c.Timeout = a.Chdir, cmpDuration(a.Timeout, time.Minute)
-	if c.Env, err = envList(a.Env); err != nil {
+	if c, err = a.runArgs.cmd(c, time.Minute); err != nil {
 		return nil, err
 	}
 	return &host.Query{Name: a.Name, Exec: env.Exec, Cmd: c}, nil
@@ -344,11 +349,10 @@ func newProbe(env module.Env, a probeArgs) (host.Resource, error) {
 	if err != nil {
 		return nil, err
 	}
-	vars, err := envList(a.Env)
-	if err != nil {
+	// The test is bounded at a minute; Timeout bounds each fix.
+	if t, err = (runArgs{Env: a.Env}).cmd(t, time.Minute); err != nil {
 		return nil, err
 	}
-	t.Env, t.Timeout = vars, time.Minute
 	p := &host.Probe{Name: a.Name, Exec: env.Exec, Test: t, Drift: a.Drift}
 	if a.Regex != "" {
 		re, err := regexp.Compile(a.Regex)
@@ -362,17 +366,12 @@ func newProbe(env module.Env, a probeArgs) (host.Resource, error) {
 		if err != nil {
 			return nil, err
 		}
-		c.Env, c.Timeout = vars, cmpDuration(a.Timeout, 10*time.Minute)
+		if c, err = (runArgs{Env: a.Env, Timeout: a.Timeout}).cmd(c, 10*time.Minute); err != nil {
+			return nil, err
+		}
 		p.Fix = append(p.Fix, c)
 	}
 	return p, nil
-}
-
-func cmpDuration(d, def time.Duration) time.Duration {
-	if d > 0 {
-		return d
-	}
-	return def
 }
 
 // envList is a command's added environment, sorted by name.

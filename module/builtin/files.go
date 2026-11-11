@@ -64,9 +64,6 @@ func fileResource(env module.Env, key, path string, a FileArgs) (host.Resource, 
 	case a.Content == nil && a.Src == "" && !a.Seed:
 		return nil, errors.New("content or src is required (or seed)")
 	}
-	if err := a.Owner.check(); err != nil {
-		return nil, err
-	}
 	var content []byte
 	from := ""
 	switch {
@@ -84,7 +81,7 @@ func fileResource(env module.Env, key, path string, a FileArgs) (host.Resource, 
 	}
 	return owned(env, a.Owner, "file "+path, func(o *host.Owner) host.Resource {
 		return &host.File{Path: env.Path(path), Content: content, From: from, Mode: a.Mode, Owner: o, Parents: a.Parents, Seed: a.Seed}
-	}), nil
+	})
 }
 
 // readFiles reads a relative src argument from env.Files.
@@ -121,12 +118,9 @@ func newDir(env module.Env, a dirArgs) (host.Resource, error) {
 	if err := absPath("path", a.Path); err != nil {
 		return nil, err
 	}
-	if err := a.Owner.check(); err != nil {
-		return nil, err
-	}
 	return owned(env, a.Owner, "dir "+a.Path, func(o *host.Owner) host.Resource {
 		return &host.Dir{Path: env.Path(a.Path), Mode: a.Mode, Owner: o}
-	}), nil
+	})
 }
 
 type absentArgs struct {
@@ -169,12 +163,9 @@ func newSymlink(env module.Env, a symlinkArgs) (host.Resource, error) {
 		}
 		aside = env.Path(a.Aside)
 	}
-	if err := a.Owner.check(); err != nil {
-		return nil, err
-	}
 	return owned(env, a.Owner, "link "+a.Path+" -> "+a.Target, func(o *host.Owner) host.Resource {
 		return &host.Symlink{Path: env.Path(a.Path), Target: a.Target, Force: a.Force, Aside: aside, Owner: o}
-	}), nil
+	})
 }
 
 type lineArgs struct {
@@ -191,11 +182,8 @@ func newLine(env module.Env, a lineArgs) (host.Resource, error) {
 	if err := absPath("path", a.Path); err != nil {
 		return nil, err
 	}
-	state := a.State
-	if state == "" {
-		state = "present"
-	}
-	if err := oneOf("state", state, "present", "absent"); err != nil {
+	state, err := choice("state", a.State, "present", "absent")
+	if err != nil {
 		return nil, err
 	}
 	var re *regexp.Regexp
@@ -232,14 +220,11 @@ func newBlock(env module.Env, a blockArgs) (host.Resource, error) {
 	if err := absPath("path", a.Path); err != nil {
 		return nil, err
 	}
-	state := a.State
-	if state == "" {
-		state = "present"
-	}
-	if err := oneOf("state", state, "present", "absent"); err != nil {
+	state, err := choice("state", a.State, "present", "absent")
+	if err != nil {
 		return nil, err
 	}
-	if a.Marker != "" && !regexp.MustCompile(`\{mark\}`).MatchString(a.Marker) {
+	if a.Marker != "" && !strings.Contains(a.Marker, "{mark}") {
 		return nil, errors.New("marker: want {mark} in it")
 	}
 	return &host.Block{Path: env.Path(a.Path), Content: a.Block, Marker: a.Marker, Absent: state == "absent"}, nil

@@ -51,10 +51,9 @@ func newSystemd(env module.Env, a systemdArgs) (host.Resource, error) {
 	if err := checkUnit(a.Name); err != nil {
 		return nil, err
 	}
-	if a.State != "" {
-		if err := oneOf("state", a.State, "started", "stopped"); err != nil {
-			return nil, fmt.Errorf("%w (restarted and reloaded are the restart and reload modules, for handlers)", err)
-		}
+	// An unset state leaves the unit's as it is.
+	if _, err := choice("state", a.State, "started", "stopped"); err != nil {
+		return nil, fmt.Errorf("%w (restarted and reloaded are the restart and reload modules, for handlers)", err)
 	}
 	if a.UnitPath != "" {
 		if err := absPath("unit_path", a.UnitPath); err != nil {
@@ -108,11 +107,8 @@ func newUser(env module.Env, a userArgs) (host.Resource, error) {
 	if !accountName.MatchString(a.Name) {
 		return nil, fmt.Errorf("name %q: not a user name", a.Name)
 	}
-	state := a.State
-	if state == "" {
-		state = "present"
-	}
-	if err := oneOf("state", state, "present", "absent"); err != nil {
+	state, err := choice("state", a.State, "present", "absent")
+	if err != nil {
 		return nil, err
 	}
 	if a.UID < 0 {
@@ -149,11 +145,8 @@ func newGroup(env module.Env, a groupArgs) (host.Resource, error) {
 	if !accountName.MatchString(a.Name) {
 		return nil, fmt.Errorf("name %q: not a group name", a.Name)
 	}
-	state := a.State
-	if state == "" {
-		state = "present"
-	}
-	if err := oneOf("state", state, "present", "absent"); err != nil {
+	state, err := choice("state", a.State, "present", "absent")
+	if err != nil {
 		return nil, err
 	}
 	if a.GID < 0 {

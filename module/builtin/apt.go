@@ -36,11 +36,8 @@ func newApt(env module.Env, a aptArgs) (host.Resource, error) {
 	if env.Apt == nil {
 		return nil, errors.New("apt: the run has no Apt")
 	}
-	state := a.State
-	if state == "" {
-		state = "present"
-	}
-	if err := oneOf("state", state, "present", "absent", "purged"); err != nil {
+	state, err := choice("state", a.State, "present", "absent", "purged")
+	if err != nil {
 		return nil, err
 	}
 	for _, n := range a.Name {
