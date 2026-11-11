@@ -129,12 +129,7 @@ func readText(p string) (string, []byte, error) {
 func WithLine(content []byte, line string, replace *regexp.Regexp) []byte {
 	var out []string
 	done := false
-	text := string(content)
-	trailing := strings.HasSuffix(text, "\n")
-	lines := strings.Split(strings.TrimSuffix(text, "\n"), "\n")
-	if text == "" {
-		lines = nil
-	}
+	lines, trailing := splitLines(content)
 	for _, s := range lines {
 		if s == line || (replace != nil && replace.MatchString(s)) {
 			if !done {
@@ -149,11 +144,7 @@ func WithLine(content []byte, line string, replace *regexp.Regexp) []byte {
 		out = append(out, line)
 		trailing = true
 	}
-	res := strings.Join(out, "\n")
-	if trailing {
-		res += "\n"
-	}
-	return []byte(res)
+	return joinLines(out, trailing)
 }
 
 // withoutLine is content without the lines equal to line or matching
@@ -162,23 +153,38 @@ func withoutLine(content []byte, line string, replace *regexp.Regexp) []byte {
 	if len(content) == 0 {
 		return content
 	}
-	text := string(content)
-	trailing := strings.HasSuffix(text, "\n")
+	lines, trailing := splitLines(content)
 	var out []string
-	for _, s := range strings.Split(strings.TrimSuffix(text, "\n"), "\n") {
+	for _, s := range lines {
 		if (line != "" && s == line) || (replace != nil && replace.MatchString(s)) {
 			continue
 		}
 		out = append(out, s)
 	}
-	if len(out) == 0 {
+	return joinLines(out, trailing)
+}
+
+// splitLines is content's lines, and whether it ends in a newline; empty
+// content has none.
+func splitLines(content []byte) (lines []string, trailing bool) {
+	text := string(content)
+	if text == "" {
+		return nil, false
+	}
+	return strings.Split(strings.TrimSuffix(text, "\n"), "\n"), strings.HasSuffix(text, "\n")
+}
+
+// joinLines is lines joined, ending in a newline when trailing; no lines
+// is empty content.
+func joinLines(lines []string, trailing bool) []byte {
+	if len(lines) == 0 {
 		return []byte{}
 	}
-	res := strings.Join(out, "\n")
+	s := strings.Join(lines, "\n")
 	if trailing {
-		res += "\n"
+		s += "\n"
 	}
-	return []byte(res)
+	return []byte(s)
 }
 
 func lineDrift(cur []byte, line string) string {
