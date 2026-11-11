@@ -129,13 +129,28 @@ func (h *Host) Path(p string) string { return filepath.Join(h.Root, p) }
 // Write writes content to the host path p, with its parents, mode 0644.
 func (h *Host) Write(p, content string) {
 	h.T.Helper()
-	full := h.Path(p)
-	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-		h.T.Fatal(err)
+	WriteFile(h.T, h.Root, p, content)
+}
+
+// WriteFile writes content to name under dir, with its parents, mode
+// 0644, and returns its path; the test fails when it cannot.
+func WriteFile(t testing.TB, dir, name, content string) string {
+	t.Helper()
+	p := filepath.Join(dir, name)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
-		h.T.Fatal(err)
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
 	}
+	return p
+}
+
+// Playbook writes content to site.yml in a new temporary directory and
+// returns its path.
+func Playbook(t testing.TB, content string) string {
+	t.Helper()
+	return WriteFile(t, t.TempDir(), "site.yml", content)
 }
 
 // Read is the content of the host path p; the test fails when it cannot

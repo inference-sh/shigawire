@@ -3,12 +3,11 @@ package shigatest_test
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/inference-sh/shigawire/host"
+	"github.com/inference-sh/shigawire/host/hosttest"
 	"github.com/inference-sh/shigawire/host/hosttest/sim"
 	"github.com/inference-sh/shigawire/module"
 	"github.com/inference-sh/shigawire/module/builtin"
@@ -16,31 +15,11 @@ import (
 	"github.com/inference-sh/shigawire/shigatest"
 )
 
-type fileArgs struct {
-	Path    string `yaml:"path"`
-	Content string `yaml:"content"`
-}
-
-type cmdArgs struct {
-	Cmd     []string `yaml:"cmd"`
-	Creates string   `yaml:"creates"`
-}
-
-// reg is the standard modules and the test ones.
+// reg is the standard modules and one that never converges.
 var reg = testRegistry()
 
 func testRegistry() *module.Registry {
 	r := builtin.Registry()
-	r.Register("test.file", module.Typed(func(env module.Env, a fileArgs) (host.Resource, error) {
-		return &host.File{Path: env.Path(a.Path), Content: []byte(a.Content), Parents: true}, nil
-	}))
-	r.Register("test.cmd", module.Typed(func(env module.Env, a cmdArgs) (host.Resource, error) {
-		c := &host.Command{Exec: env.Exec, Cmd: host.Cmd{Name: a.Cmd[0], Args: a.Cmd[1:]}}
-		if a.Creates != "" {
-			c.Creates = env.Path(a.Creates)
-		}
-		return c, nil
-	}))
 	r.Register("test.drifting", func(module.Env, map[string]any) (host.Resource, error) { return drifting{}, nil })
 	return r
 }
@@ -56,26 +35,17 @@ func (drifting) Apply(context.Context, host.State) (host.Result, error) {
 	return host.Result{Status: host.Changed}, nil
 }
 
-func playbook(t *testing.T, content string) string {
-	t.Helper()
-	p := filepath.Join(t.TempDir(), "site.yml")
-	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return p
-}
-
 func TestRun(t *testing.T) {
-	p := playbook(t, `
+	p := hosttest.Playbook(t, `
 steps:
   - name: s
     tasks:
-      - test.file: {path: /etc/motd, content: "${WHO}"}
+      - file: {path: /etc/motd, content: "${WHO}", parents: true}
         notify: reload
-      - test.cmd: {cmd: [apt-get, update]}
+      - command: {cmd: [apt-get, update]}
     handlers:
       - name: reload
-        test.cmd: {cmd: [systemctl, restart, x]}
+        command: {cmd: [systemctl, restart, x]}
 `)
 	h := sim.New(t)
 	shigatest.RunOptions(t, h.Host, p, pb.Options{Registry: reg, Set: map[string]string{"WHO": "me"}})
@@ -101,7 +71,7 @@ func (f *fakeT) Fatalf(format string, a ...any) {
 func (f *fakeT) Fatal(a ...any) { f.Fatalf("%v", a...) }
 
 func TestRunFailsWhenNotConverging(t *testing.T) {
-	p := playbook(t, "steps:\n  - name: s\n    tasks:\n      - test.drifting:\n")
+	p := hosttest.Playbook(t, "steps:\n  - name: s\n    tasks:\n      - test.drifting:\n")
 	ft := &fakeT{TB: t}
 	func() {
 		defer func() {
@@ -119,10 +89,10 @@ func TestRunFailsWhenNotConverging(t *testing.T) {
 func sprintf(format string, a ...any) string { return fmt.Sprintf(format, a...) }
 
 func TestRunOptionsAndLoad(t *testing.T) {
-	p := playbook(t, `
+	p := hosttest.Playbook(t, `
 steps:
-  - {name: a, tasks: [{test.file: {path: /a, content: "${A}"}}]}
-  - {name: b, tasks: [{test.file: {path: /b, content: x}}]}
+  - {name: a, tasks: [{file: {path: /a, content: "${A}"}}]}
+  - {name: b, tasks: [{file: {path: /b, content: x}}]}
 `)
 	h := sim.New(t)
 	shigatest.RunOptions(t, h.Host, p, pb.Options{Registry: reg, Only: []string{"a"}, Set: map[string]string{"A": "1"}})
@@ -140,12 +110,12 @@ steps:
 }
 
 func TestDefaultRegistryIsBuiltins(t *testing.T) {
-	p := playbook(t, "steps:\n  - name: s\n    tasks:\n      - file: {path: /etc/motd, content: hi}\n")
+	p := hosttest.Playbook(t, "steps:\n  - name: s\n    tasks:\n      - file: {path: /etc/motd, content: hi}\n")
 	if h := shigatest.Run(t, p, nil); h.Read("/etc/motd") != "hi" {
 		t.Fatal(h.Read("/etc/motd"))
 	}
-	other := playbook(t, "steps:\n  - name: s\n    tasks:\n      - test.file: {path: /x, content: x}\n")
-	if _, err := shigatest.Load(sim.New(t).Host, other, pb.Options{}); err == nil || !strings.Contains(err.Error(), `unknown module "test.file"`) {
+	other := hosttest.Playbook(t, "steps:\n  - name: s\n    tasks:\n      - test.drifting: {}\n")
+	if _, err := shigatest.Load(sim.New(t).Host, other, pb.Options{}); err == nil || !strings.Contains(err.Error(), `unknown module "test.drifting"`) {
 		t.Fatalf("err %v", err)
 	}
 }

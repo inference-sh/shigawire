@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -28,7 +27,8 @@ func (failing) Apply(context.Context, host.State) (host.Result, error) {
 	return host.Result{}, nil
 }
 
-// testRegistry is the standard modules and two test ones.
+// testRegistry is the standard modules, one of another package's with
+// a doc tag (for shiga modules), and one that fails.
 func testRegistry() *module.Registry {
 	r := builtin.Registry()
 	r.Register("test.file", module.Typed(func(env module.Env, a fileArgs) (host.Resource, error) {
@@ -62,14 +62,6 @@ func (x *harness) run(args ...string) int {
 	return x.c.main(context.Background(), args)
 }
 
-func writePlaybook(t *testing.T, content string) string {
-	p := filepath.Join(t.TempDir(), "site.yml")
-	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return p
-}
-
 const site = `
 name: site
 steps:
@@ -77,17 +69,17 @@ steps:
     tags: [base]
     tasks:
       - name: motd
-        test.file: {path: /etc/motd, content: "hi ${WHO}"}
+        file: {path: /etc/motd, content: "hi ${WHO}", parents: true}
   - name: issue
     tasks:
       - name: issue
-        test.file: {path: /etc/issue, content: x}
+        file: {path: /etc/issue, content: x, parents: true}
         when: exists /etc/want-issue
 `
 
 func TestPlanApplyVerify(t *testing.T) {
 	x := newHarness(t)
-	p := writePlaybook(t, site)
+	p := hosttest.Playbook(t, site)
 
 	if code := x.run("verify", p); code != exitChanged {
 		t.Fatalf("verify before apply: %d\n%s%s", code, x.stdout, x.stderr)
@@ -131,7 +123,7 @@ func TestPlanApplyVerify(t *testing.T) {
 
 func TestFailures(t *testing.T) {
 	x := newHarness(t)
-	bad := writePlaybook(t, "steps:\n  - name: s\n    tasks:\n      - test.fail:\n      - test.file: {path: /x, content: y}\n")
+	bad := hosttest.Playbook(t, "steps:\n  - name: s\n    tasks:\n      - test.fail:\n      - file: {path: /x, content: y, parents: true}\n")
 	if code := x.run("apply", bad); code != exitFailed {
 		t.Fatal(code)
 	}
@@ -148,13 +140,13 @@ func TestFailures(t *testing.T) {
 	}
 	// After a change it may depend on: plan cannot tell, exits 0, and says
 	// so.
-	after := writePlaybook(t, "steps:\n  - name: s\n    tasks:\n      - test.file: {path: /x, content: y}\n      - test.fail:\n")
+	after := hosttest.Playbook(t, "steps:\n  - name: s\n    tasks:\n      - file: {path: /x, content: y, parents: true}\n      - test.fail:\n")
 	if code := x.run("plan", after); code != exitOK || !strings.HasSuffix(x.stdout.String(),
 		"plan: 1 changed, 1 unknown\n1 unknown: checks that may depend on changes planned before them, which apply makes first\n") {
 		t.Fatal(code, x.stdout)
 	}
 	// A fail task the plan reaches is a refusal apply stops at.
-	refused := writePlaybook(t, "steps:\n  - name: s\n    tasks:\n      - test.file: {path: /x, content: y}\n      - fail: {msg: not for this host}\n")
+	refused := hosttest.Playbook(t, "steps:\n  - name: s\n    tasks:\n      - file: {path: /x, content: y, parents: true}\n      - fail: {msg: not for this host}\n")
 	for _, args := range [][]string{{"plan", refused}, {"plan", refused, "--detailed-exitcode"}} {
 		if code := x.run(args...); code != exitFailed || !strings.Contains(x.stdout.String(), "unknown  s: fail: not for this host") {
 			t.Fatal(args, code, x.stdout)
@@ -194,7 +186,7 @@ func TestVersionAndModules(t *testing.T) {
 
 func TestParseInterspersed(t *testing.T) {
 	x := newHarness(t)
-	p := writePlaybook(t, site)
+	p := hosttest.Playbook(t, site)
 	if code := x.run("plan", "--quiet", p, "--", "--only"); code != exitFailed || !strings.Contains(x.stderr.String(), "want one playbook, got 2") {
 		t.Fatal(code, x.stderr)
 	}
@@ -205,13 +197,7 @@ func TestParseInterspersed(t *testing.T) {
 func writeDir(t *testing.T, files map[string]string) string {
 	dir := t.TempDir()
 	for name, content := range files {
-		p := filepath.Join(dir, name)
-		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
-			t.Fatal(err)
-		}
+		hosttest.WriteFile(t, dir, name, content)
 	}
 	return filepath.Join(dir, "site.yml")
 }
@@ -365,21 +351,21 @@ func TestTestCommand(t *testing.T) {
 		t.Fatal("ran on the host", calls)
 	}
 
-	loop := writePlaybook(t, "steps:\n  - name: s\n    tasks:\n      - command: {cmd: make, creates: /opt/built}\n      - test.file: {path: /etc/x, content: x}\n")
+	loop := hosttest.Playbook(t, "steps:\n  - name: s\n    tasks:\n      - command: {cmd: make, creates: /opt/built}\n      - file: {path: /etc/x, content: x, parents: true}\n")
 	if code := x.run("test", loop); code != exitFailed {
 		t.Fatal(code, x.stdout)
 	}
 	out = x.stdout.String()
-	if !strings.Contains(out, "changed  s: command /bin/sh -c make") || strings.Contains(out, "s: test.file") ||
+	if !strings.Contains(out, "changed  s: command /bin/sh -c make") || strings.Contains(out, "s: file /etc/x") ||
 		!strings.Contains(out, "FAIL: apply again changed 1: the playbook does not converge") {
 		t.Fatal(out)
 	}
 
-	broken := writePlaybook(t, "steps:\n  - name: s\n    tasks:\n      - test.fail:\n")
+	broken := hosttest.Playbook(t, "steps:\n  - name: s\n    tasks:\n      - test.fail:\n")
 	if code := x.run("test", broken); code != exitFailed || !strings.Contains(x.stdout.String(), "failed   s: failing: broken\nFAIL: apply: ") {
 		t.Fatal(code, x.stdout)
 	}
-	if code := x.run("test", writePlaybook(t, "steps: [\n")); code != exitFailed || x.stderr.Len() == 0 {
+	if code := x.run("test", hosttest.Playbook(t, "steps: [\n")); code != exitFailed || x.stderr.Len() == 0 {
 		t.Fatal(code, x.stderr)
 	}
 }
