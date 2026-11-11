@@ -6,6 +6,8 @@ import (
 
 	"github.com/inference-sh/shigawire/host"
 	"github.com/inference-sh/shigawire/host/hosttest"
+	"github.com/inference-sh/shigawire/host/hosttest/sim"
+	"github.com/inference-sh/shigawire/module"
 )
 
 const ufwDefaults = `# /etc/default/ufw
@@ -15,58 +17,18 @@ DEFAULT_OUTPUT_POLICY="ACCEPT"
 DEFAULT_FORWARD_POLICY="DROP"
 `
 
-// fakeUFW is ufw writing its files: the rules it is given are added as
-// the tuple lines in tuples (v4, then v6, "" for none).
-func fakeUFW(h *hosttest.Host, tuples map[string][2]string) {
+// ufwHost is a simulated host with ufw installed, its default incoming
+// policy ACCEPT.
+func ufwHost(t *testing.T) (*sim.Host, module.Env) {
+	h, env := simHost(t)
+	hosttest.ApplyOne(t, env.Apt.Install("ufw"))
 	h.Write("/etc/default/ufw", ufwDefaults)
-	h.Write("/etc/ufw/ufw.conf", "ENABLED=no\nLOGLEVEL=low\n")
-	h.Write("/etc/ufw/user.rules", "*filter\n:ufw-user-input - [0:0]\n### RULES ###\n\n### END RULES ###\nCOMMIT\n")
-	h.Write("/etc/ufw/user6.rules", "*filter\n:ufw6-user-input - [0:0]\n### RULES ###\n\n### END RULES ###\nCOMMIT\n")
-	add := func(file, tuple string) {
-		if tuple != "" {
-			c := h.Read(file)
-			h.Write(file, strings.Replace(c, "### END RULES ###", "### tuple ### "+tuple+"\n-A ufw-user-input -j ACCEPT\n\n### END RULES ###", 1))
-		}
-	}
-	h.Exec.Respond = func(line string) host.Output {
-		switch {
-		case line == "ufw default deny incoming":
-			h.Write("/etc/default/ufw", strings.Replace(h.Read("/etc/default/ufw"), `INPUT_POLICY="ACCEPT"`, `INPUT_POLICY="DROP"`, 1))
-		case line == "ufw --force enable":
-			h.Write("/etc/ufw/ufw.conf", "ENABLED=yes\nLOGLEVEL=low\n")
-		case strings.HasPrefix(line, "ufw delete "):
-			for _, f := range []string{"/etc/ufw/user.rules", "/etc/ufw/user6.rules"} {
-				var keep []string
-				for _, l := range strings.Split(h.Read(f), "\n") {
-					t := tuples[strings.TrimPrefix(line, "ufw delete ")]
-					if l != "### tuple ### "+t[0] && l != "### tuple ### "+t[1] {
-						keep = append(keep, l)
-					}
-				}
-				h.Write(f, strings.Join(keep, "\n"))
-			}
-		case strings.HasPrefix(line, "ufw "):
-			t, ok := tuples[strings.TrimPrefix(line, "ufw ")]
-			if !ok {
-				return host.Output{Code: 1, Out: "ERROR: test has no tuple for " + line}
-			}
-			add("/etc/ufw/user.rules", t[0])
-			add("/etc/ufw/user6.rules", t[1])
-		}
-		return host.Output{}
-	}
+	h.Exec.Reset()
+	return h, env
 }
 
 func TestUFW(t *testing.T) {
-	h, env := newHost(t)
-	// The tuples as ufw 0.36 writes them for these commands.
-	fakeUFW(h, map[string][2]string{
-		"allow in proto tcp from any to any port 22": {"allow tcp 22 0.0.0.0/0 any 0.0.0.0/0 in", "allow tcp 22 ::/0 any ::/0 in"},
-		"allow in from 172.16.0.0/12 to any comment Docker internal": {
-			"allow any any 0.0.0.0/0 any 172.16.0.0/12 in comment=446f636b657220696e7465726e616c", ""},
-		"deny in proto tcp from any to any port 5432":                {"deny tcp 5432 0.0.0.0/0 any 0.0.0.0/0 in", "deny tcp 5432 ::/0 any ::/0 in"},
-		"allow in on tailscale0 from 100.64.0.0/10 to any port 5432": {"allow any 5432 0.0.0.0/0 any 100.64.0.0/10 in_tailscale0", ""},
-	})
+	h, env := ufwHost(t)
 	args := map[string]any{
 		"default": map[string]any{"incoming": "deny", "outgoing": "allow"},
 		"enabled": true,
@@ -108,10 +70,10 @@ func TestUFW(t *testing.T) {
 }
 
 func TestUFWStoredOtherwise(t *testing.T) {
-	h, env := newHost(t)
+	h, env := ufwHost(t)
 	// ufw takes the rule and stores it in a form the module does not
-	// expect: an error, not a change every run.
-	fakeUFW(h, map[string][2]string{"allow in proto tcp from any to any port 80": {"allow tcp 80 0.0.0.0/0 any 0.0.0.0/0 in", ""}})
+	// expect (here: not at all): an error, not a change every run.
+	h.Exec.On("ufw allow", host.Output{})
 	got, err := play(hosttest.Apply, host.Task{Resource: build(t, env, "ufw", map[string]any{"rules": []any{map[string]any{"rule": "allow", "port": "80", "proto": "tcp"}}})})
 	if err == nil || !strings.Contains(got[0].Msg, "still differ") {
 		t.Fatal(hosttest.Statuses(got), err)
@@ -119,7 +81,7 @@ func TestUFWStoredOtherwise(t *testing.T) {
 }
 
 func TestUFWNotInstalled(t *testing.T) {
-	_, env := newHost(t)
+	_, env := simHost(t)
 	got, err := play(hosttest.Plan, host.Task{Resource: build(t, env, "ufw", map[string]any{"enabled": true})})
 	if err != nil || got[0].Status != host.Unknown || !strings.Contains(got[0].Msg, "not installed") {
 		t.Fatal(hosttest.Statuses(got), err)
