@@ -42,6 +42,11 @@ type Output struct {
 // OK reports whether the command ran and exited 0.
 func (o Output) OK() bool { return o.Err == nil }
 
+// ErrNoDir is the error of a command whose Cmd.Dir is not there. In Plan,
+// a resource's Check that runs a command there is Unknown: an earlier
+// task may make the directory.
+var ErrNoDir = errors.New("the directory does not exist")
+
 // Exec runs commands. OSExec runs them on this host; tests use a fake.
 type Exec interface {
 	Run(ctx context.Context, c Cmd) Output
@@ -84,8 +89,14 @@ type OSExec struct {
 var killGrace = 10 * time.Second
 
 // Run runs c. A nonzero exit is an Output with Err set and the last lines
-// of the output in its message.
+// of the output in its message. A Dir that is not there is ErrNoDir: exec
+// would report the failed chdir as the binary missing.
 func (e OSExec) Run(ctx context.Context, c Cmd) Output {
+	if c.Dir != "" {
+		if _, err := os.Stat(c.Dir); errors.Is(err, fs.ErrNotExist) {
+			return Output{Code: -1, Err: fmt.Errorf("run %s in %s: %w", c.Name, c.Dir, ErrNoDir)}
+		}
+	}
 	name, env := c.Name, c.Env
 	if e.Path != "" {
 		p, err := e.LookPath(c.Name)

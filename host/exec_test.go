@@ -84,3 +84,13 @@ func TestOSExec_Path(t *testing.T) {
 		t.Fatalf("%+v", o)
 	}
 }
+
+// A Dir that is not there is said so (ErrNoDir), not as the binary
+// missing: exec reports a failed chdir as fork/exec of the binary.
+func TestOSExec_NoDir(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "x")
+	o := OSExec{}.Run(context.Background(), Cmd{Name: "true", Dir: dir})
+	if o.Code != -1 || !errors.Is(o.Err, ErrNoDir) || o.Err.Error() != "run true in "+dir+": the directory does not exist" {
+		t.Fatalf("%+v", o)
+	}
+}

@@ -429,7 +429,9 @@ in `docker compose config --hash '*'` has a container whose
 otherwise `docker compose up --detach --remove-orphans` runs. Down is in
 place when the project has no containers; otherwise
 `docker compose down --remove-orphans` runs. The commands run in
-`project_src`.
+`project_src`. In `plan`, a `project_src` that is not there yet is
+`unknown` (`project_src /srv/app does not exist yet`), like any check
+that reads what an earlier task makes.
 
 | key | type | |
 |---|---|---|

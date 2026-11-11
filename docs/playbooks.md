@@ -301,7 +301,7 @@ apply: 1 ok, 2 changed, 1 skipped
 | `failed` | The check or apply failed. In `verify`, a check that ran and found the host wrong (an `assert` that does not hold). |
 | `ignored` | Failed, with `ignore_errors: true`; the play went on. In plan and verify, a check that failed in such a task: it neither blocks a plan nor fails verify. |
 | `warn` | The module reported a warning; the play went on. |
-| `unknown` | In plan or verify, the check failed, so whether it is in place is not known: it could not read what it reads (a file's owner with no such user yet, ufw not installed). In plan, also an `assert` that does not hold, which a change planned before it may make pass. |
+| `unknown` | In plan or verify, the check failed, so whether it is in place is not known: it could not read what it reads (a file's owner with no such user yet, ufw not installed, a compose `project_src` or a `chdir` an earlier task makes). In plan, also an `assert` that does not hold, which a change planned before it may make pass. |
 | `skipped` | Its `when` was false. |
 
 `--quiet` leaves out the `ok` and `skipped` lines.

@@ -194,8 +194,13 @@ func parseComposePS(out string) ([]composeContainer, error) {
 	return cs, nil
 }
 
+// Check's error, when Dir is not there (ErrNoDir), says so: in Plan an
+// earlier task may make it.
 func (c *Compose) Check(ctx context.Context) (State, error) {
 	o, err := run(ctx, c.Exec, c.cmd(time.Minute, "ps", "--all", "--format", "json"))
+	if errors.Is(err, ErrNoDir) {
+		return State{}, fmt.Errorf("project_src %s does not exist yet", c.Dir)
+	}
 	if err != nil {
 		return State{}, err
 	}

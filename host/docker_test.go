@@ -2,6 +2,7 @@ package host
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 )
 
@@ -42,5 +43,24 @@ func TestSwarm_Validate(t *testing.T) {
 		if _, err := s.Check(context.Background()); err == nil || len(ex.calls) != 0 {
 			t.Errorf("%+v: %v, ran %v", s, err, ex.calls)
 		}
+	}
+}
+
+// In Plan, a project directory an earlier task makes is not there yet:
+// compose is Unknown, saying so, and not Blocked, since the change
+// planned before it explains it. With no such task it is Blocked.
+func TestComposePlanNoDir(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "x")
+	compose := &Compose{Exec: OSExec{}, Dir: dir}
+	got, err := runMode((*Runner).Plan, Play{Tasks: []Task{{Resource: &Dir{Path: dir}}, {Resource: compose}}})
+	if err != nil || statuses(got) != "dir "+dir+"=changed compose "+dir+"=unknown" {
+		t.Fatalf("%s %v", statuses(got), err)
+	}
+	if r := got[1]; r.Blocked || r.Msg != "project_src "+dir+" does not exist yet" {
+		t.Fatalf("%+v", r)
+	}
+	got, _ = runMode((*Runner).Plan, Play{Tasks: []Task{{Resource: compose}}})
+	if !got[0].Blocked {
+		t.Fatalf("%+v", got[0])
 	}
 }
