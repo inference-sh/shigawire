@@ -236,3 +236,26 @@ func TestFileSeed(t *testing.T) {
 		t.Fatalf("mode %v", fi.Mode())
 	}
 }
+
+// sameStream compares across buffer boundaries and stops at a length
+// difference.
+func TestSameStream(t *testing.T) {
+	big := strings.Repeat("x", 32<<10)
+	for _, c := range []struct {
+		a, b string
+		want bool
+	}{
+		{"", "", true},
+		{"abc", "abc", true},
+		{"abc", "abd", false},
+		{big, big, true},
+		{big, big + "y", false},
+		{big + "y", big + "z", false},
+		{big + "y", big + "y", true},
+	} {
+		got, err := sameStream(strings.NewReader(c.a), strings.NewReader(c.b))
+		if err != nil || got != c.want {
+			t.Errorf("%d/%d bytes: %v %v, want %v", len(c.a), len(c.b), got, err, c.want)
+		}
+	}
+}

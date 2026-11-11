@@ -116,8 +116,12 @@ func (f *File) sameContent(fi fs.FileInfo) (bool, error) {
 	if fi.Size() != int64(len(f.Content)) {
 		return false, nil
 	}
-	got, err := os.ReadFile(f.Path)
-	return bytes.Equal(got, f.Content), err
+	fh, err := os.Open(f.Path)
+	if err != nil {
+		return false, err
+	}
+	defer fh.Close()
+	return sameStream(fh, bytes.NewReader(f.Content))
 }
 
 func (f *File) Apply(ctx context.Context, st State) (Result, error) {
@@ -352,25 +356,50 @@ func writeAtomic(path string, r io.Reader, mode fs.FileMode, owner *Owner) error
 }
 
 // sameFiles reports whether the files at a and b hold the same bytes:
-// sizes first, then hashes.
+// sizes first, then the bytes.
 func sameFiles(a, b string) (bool, error) {
-	sa, err := os.Stat(a)
+	fa, err := os.Open(a)
 	if err != nil {
 		return false, err
 	}
-	sb, err := os.Stat(b)
+	defer fa.Close()
+	fb, err := os.Open(b)
 	if err != nil {
 		return false, err
 	}
-	if sa.Size() != sb.Size() {
-		return false, nil
-	}
-	ha, err := fileSum(a)
+	defer fb.Close()
+	sa, err := fa.Stat()
 	if err != nil {
 		return false, err
 	}
-	hb, err := fileSum(b)
-	return ha == hb, err
+	sb, err := fb.Stat()
+	if err != nil || sa.Size() != sb.Size() {
+		return false, err
+	}
+	return sameStream(fa, fb)
+}
+
+// sameStream reports whether a and b read the same bytes, reading both a
+// buffer at a time and stopping at the first difference.
+func sameStream(a, b io.Reader) (bool, error) {
+	ba, bb := make([]byte, 32<<10), make([]byte, 32<<10)
+	for {
+		na, errA := io.ReadFull(a, ba)
+		nb, errB := io.ReadFull(b, bb)
+		if !bytes.Equal(ba[:na], bb[:nb]) {
+			return false, nil
+		}
+		endA := errA == io.EOF || errA == io.ErrUnexpectedEOF
+		endB := errB == io.EOF || errB == io.ErrUnexpectedEOF
+		switch {
+		case errA != nil && !endA:
+			return false, errA
+		case errB != nil && !endB:
+			return false, errB
+		case endA || endB:
+			return endA && endB, nil
+		}
+	}
 }
 
 // fileSum is the hex sha256 of the file at path.
