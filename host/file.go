@@ -111,7 +111,7 @@ func (f *File) sameContent(fi fs.FileInfo) (bool, error) {
 		return true, nil
 	}
 	if f.From != "" {
-		return sameFiles(f.From, f.Path)
+		return SameContent(f.From, f.Path)
 	}
 	if fi.Size() != int64(len(f.Content)) {
 		return false, nil
@@ -355,9 +355,9 @@ func writeAtomic(path string, r io.Reader, mode fs.FileMode, owner *Owner) error
 	return nil
 }
 
-// sameFiles reports whether the files at a and b hold the same bytes:
+// SameContent reports whether the files at a and b hold the same bytes:
 // sizes first, then the bytes.
-func sameFiles(a, b string) (bool, error) {
+func SameContent(a, b string) (bool, error) {
 	fa, err := os.Open(a)
 	if err != nil {
 		return false, err

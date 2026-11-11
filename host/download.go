@@ -125,9 +125,9 @@ func get(ctx context.Context, client *http.Client, url string) (*http.Response, 
 	return resp, nil
 }
 
-// fetch reads what url serves with client, up to limit bytes: an
+// Fetch reads what url serves with client, up to limit bytes: an
 // installer's index, a published sha256.
-func fetch(ctx context.Context, client *http.Client, url string, limit int64) ([]byte, error) {
+func Fetch(ctx context.Context, client *http.Client, url string, limit int64) ([]byte, error) {
 	resp, err := get(ctx, client, url)
 	if err != nil {
 		return nil, err

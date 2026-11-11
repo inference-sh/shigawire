@@ -97,7 +97,7 @@ func TestWithoutLine(t *testing.T) {
 		if c.re != "" {
 			re = regexp.MustCompile(c.re)
 		}
-		if got := string(withoutLine([]byte(c.in), c.line, re)); got != c.want {
+		if got := string(WithoutLine([]byte(c.in), c.line, re)); got != c.want {
 			t.Errorf("%q - %q: %q, want %q", c.in, c.line, got, c.want)
 		}
 	}

@@ -14,9 +14,9 @@ func docker(args ...string) Cmd {
 	return Cmd{Name: "docker", Args: args, Timeout: 5 * time.Minute}
 }
 
-// swarmState is the node's swarm state as docker info has it: inactive,
+// SwarmState is the node's swarm state as docker info has it: inactive,
 // pending, active, error or locked.
-func swarmState(ctx context.Context, x Exec) (string, error) {
+func SwarmState(ctx context.Context, x Exec) (string, error) {
 	o, err := run(ctx, x, docker("info", "--format", "{{.Swarm.LocalNodeState}}"))
 	if err != nil {
 		return "", fmt.Errorf("docker info: %w", err)
@@ -67,7 +67,7 @@ func (s *Swarm) Check(ctx context.Context) (State, error) {
 	if err := s.Validate(); err != nil {
 		return State{}, err
 	}
-	st, err := swarmState(ctx, s.Exec)
+	st, err := SwarmState(ctx, s.Exec)
 	if err != nil {
 		return State{}, err
 	}
@@ -107,7 +107,7 @@ func (s *Swarm) Apply(ctx context.Context, st State) (Result, error) {
 		// Not o.Err: its message may hold the command line, and the token.
 		return Result{}, fmt.Errorf("docker swarm %s: exit %d: %s", args[1], o.Code, LastLines(o.Out, 2))
 	}
-	got, err := swarmState(ctx, s.Exec)
+	got, err := SwarmState(ctx, s.Exec)
 	if err != nil {
 		return Result{}, err
 	}

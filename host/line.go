@@ -96,7 +96,7 @@ func (l *Line) read() (path string, cur, want []byte, err error) {
 		return "", nil, nil, err
 	}
 	if l.Absent {
-		return path, cur, withoutLine(cur, l.Line, l.Replace), nil
+		return path, cur, WithoutLine(cur, l.Line, l.Replace), nil
 	}
 	return path, cur, WithLine(cur, l.Line, l.Replace), nil
 }
@@ -147,9 +147,9 @@ func WithLine(content []byte, line string, replace *regexp.Regexp) []byte {
 	return joinLines(out, trailing)
 }
 
-// withoutLine is content without the lines equal to line or matching
+// WithoutLine is content without the lines equal to line or matching
 // replace ("" and nil match none).
-func withoutLine(content []byte, line string, replace *regexp.Regexp) []byte {
+func WithoutLine(content []byte, line string, replace *regexp.Regexp) []byte {
 	if len(content) == 0 {
 		return content
 	}

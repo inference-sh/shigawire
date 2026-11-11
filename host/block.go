@@ -56,7 +56,7 @@ func (b *Block) Check(context.Context) (State, error) {
 		return inPlace()
 	}
 	begin, end := b.markers()
-	want, err := withBlock(cur, begin, end, b.Content, b.Absent)
+	want, err := WithBlock(cur, begin, end, b.Content, b.Absent)
 	switch {
 	case err != nil:
 		return State{}, fmt.Errorf("%s: %w", path, err)
@@ -79,11 +79,11 @@ func (b *Block) Apply(ctx context.Context, st State) (Result, error) {
 	return changed("%s", st.Drift)
 }
 
-// withBlock is content with block between the marker lines begin and end,
+// WithBlock is content with block between the marker lines begin and end,
 // as Block puts it there; absent removes the markers and what is between
 // them, and with no block leaves content as it is. A begin marker with no
 // end marker after it is an error.
-func withBlock(content []byte, begin, end, block string, absent bool) ([]byte, error) {
+func WithBlock(content []byte, begin, end, block string, absent bool) ([]byte, error) {
 	lines, _ := splitLines(content)
 	var mine []string
 	if !absent {
