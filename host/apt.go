@@ -25,20 +25,11 @@ type Apt struct {
 	// it (sources, keyrings, the lists); the commands it runs go through
 	// Exec, which must run them on that same host (in a chroot of Root).
 	Root string
-	// LenientUpdate: an update whose fetch from a source fails exits 0
-	// over that source's old lists, as apt-get does by default. Without
-	// it updates run with APT::Update::Error-Mode=any, and such a fetch
-	// fails the update.
-	LenientUpdate bool
 
 	pkgs map[string]pkgState // nil until read, and after apt changed it
 	// sourcesNew: a resource of a's added or changed a source or a key
 	// since the last update, which is due now whatever the lists' age.
 	sourcesNew bool
-	// alone is the repo whose source an update refreshed alone
-	// (UpdateRepo) since the last full update, which is due now: the
-	// lists' times say nothing.
-	alone string
 	// sleep waits between tries; nil waits for real (tests make it instant).
 	sleep func(ctx context.Context, d time.Duration) error
 }
@@ -202,23 +193,12 @@ func isInstalled(pkgs map[string]pkgState, n string) bool {
 	return p.installed() && (!pinned || p.version == version)
 }
 
-// errorMode is the apt-get options that make a failed fetch fail an
-// update, unless LenientUpdate.
-func (a *Apt) errorMode() []string {
-	if a.LenientUpdate {
-		return nil
-	}
-	// Error-Mode=any: a fetch that failed is an error, not a warning
-	// and an exit 0 over the old lists.
-	return []string{"-o", "APT::Update::Error-Mode=any"}
-}
-
 // Update is the package lists, at most maxAge old (0: updated every run),
 // and updated whatever their age when a source or a key changed since the
-// last update: through a's own Repo or InstallDeb, or by its file's
-// time. A fetch that fails fails the update (apt-get itself only warns;
-// Apt.LenientUpdate keeps that), which is tried updateTries times. It
-// is an action: the lists' age is no state Verify reports.
+// last update: through a's own Repo, or by its file's time. A fetch that
+// fails fails the update (APT::Update::Error-Mode=any; apt-get itself
+// only warns and exits 0 over the old lists), which is tried updateTries
+// times. It is an action: the lists' age is no state Verify reports.
 func (a *Apt) Update(maxAge time.Duration) Resource { return &aptUpdate{a: a, maxAge: maxAge} }
 
 type aptUpdate struct {
@@ -262,8 +242,6 @@ func (u *aptUpdate) due() (bool, string) {
 		return true, ""
 	case u.a.sourcesNew:
 		return true, "a source changed"
-	case u.a.alone != "":
-		return true, u.a.alone + " updated alone"
 	}
 	// A fresh image's lists are removed and the directory left, as new as
 	// the image: its age says nothing.
@@ -324,7 +302,7 @@ func (u *aptUpdate) Apply(ctx context.Context, st State) (Result, error) {
 	why := st.Data.(string)
 	var err error
 	for try := 1; try <= updateTries; try++ {
-		if _, err = u.a.get(ctx, 10*time.Minute, append(u.a.errorMode(), "update")...); err == nil {
+		if _, err = u.a.get(ctx, 10*time.Minute, "-o", "APT::Update::Error-Mode=any", "update"); err == nil {
 			break
 		}
 		if try == updateTries {
@@ -337,7 +315,7 @@ func (u *aptUpdate) Apply(ctx context.Context, st State) (Result, error) {
 	// An update that fetched nothing new leaves the lists' directory as it
 	// was, and without Ubuntu's stamp hook a stamp is not renewed: dated
 	// here, the lists are as fresh as the update that just succeeded.
-	u.a.sourcesNew, u.a.alone = false, ""
+	u.a.sourcesNew = false
 	now := time.Now()
 	for _, p := range listsStamps() {
 		if err := os.Chtimes(u.a.path(p), now, now); err != nil && !os.IsNotExist(err) {
@@ -348,41 +326,6 @@ func (u *aptUpdate) Apply(ctx context.Context, st State) (Result, error) {
 		return changed("updated")
 	}
 	return changed("updated: %s", why)
-}
-
-// UpdateRepo is an update of r's lists alone, run once, when
-// Update(maxAge) is due: before it, a repo that cannot be used (it is
-// unreachable, or apt refuses its index) fails here, at once, instead of
-// after the full update's tries. The full update is still due after it.
-func (a *Apt) UpdateRepo(r Repo, maxAge time.Duration) Resource {
-	return &aptUpdateRepo{u: aptUpdate{a: a, maxAge: maxAge}, r: r}
-}
-
-type aptUpdateRepo struct {
-	u aptUpdate
-	r Repo
-}
-
-func (u *aptUpdateRepo) ID() string { return "apt update " + u.r.Name }
-
-func (u *aptUpdateRepo) Check(context.Context) (State, error) {
-	if due, _ := u.u.due(); due && u.u.a.alone != u.r.Name {
-		return action("update %s", u.r.Name)
-	}
-	return inPlace()
-}
-
-func (u *aptUpdateRepo) Apply(ctx context.Context, _ State) (Result, error) {
-	// The one source, nothing else, and the other sources' lists kept
-	// (List-Cleanup=0): as the infsh-boxd-update service does.
-	args := slices.Concat([]string{"-o", "Dir::Etc::SourceList=" + u.r.SourcesPath(), "-o", "Dir::Etc::SourceParts=/dev/null",
-		"-o", "APT::Get::List-Cleanup=0"}, u.u.a.errorMode(), []string{"update"})
-	_, err := u.u.a.get(ctx, 10*time.Minute, args...)
-	if err != nil {
-		return Result{}, err
-	}
-	u.u.a.alone = u.r.Name
-	return changed("updated %s", u.r.Name)
 }
 
 // aptOp is an apt resource: Check lists what is left to do (the packages
@@ -396,8 +339,6 @@ type aptOp struct {
 	args func(todo []string) []string
 	// verb and done say it in the messages ("install", "installed").
 	verb, done string
-	// sources: what it installs may add an apt source.
-	sources bool
 }
 
 func (o *aptOp) ID() string { return o.id }
@@ -416,9 +357,6 @@ func (o *aptOp) Apply(ctx context.Context, st State) (Result, error) {
 	defer o.a.Invalidate()
 	if _, err := o.a.get(ctx, 30*time.Minute, o.args(todo)...); err != nil {
 		return Result{}, err
-	}
-	if o.sources {
-		o.a.sourcesNew = true
 	}
 	return changed("%s %s", o.done, strings.Join(todo, " "))
 }
@@ -446,25 +384,13 @@ func (a *Apt) Install(names ...string) Resource {
 		}}
 }
 
-// Pkgs selects packages by name: a list, or a predicate over the names
-// installed (a driver's whole family, by pattern).
-type Pkgs struct {
-	// Desc is the selection in a message ("nvidia-*-server").
-	Desc  string
-	Match func(name string) bool
-}
-
-// Names selects packages by their names.
-func Names(names ...string) Pkgs {
-	return Pkgs{Desc: strings.Join(names, " "), Match: func(n string) bool { return slices.Contains(names, n) }}
-}
-
-// Remove is the selected packages not on the host, nor any part of them:
+// Remove is the named packages not on the host, nor any part of them:
 // installed, or unpacked or configured only partway (what a failed
 // install leaves). purge removes their config files too, and purges
 // those whose config files are all that is left.
-func (a *Apt) Remove(sel Pkgs, purge bool) Resource {
-	o := &aptOp{a: a, id: "apt remove " + sel.Desc, verb: "remove", done: "removed",
+func (a *Apt) Remove(names []string, purge bool) Resource {
+	desc := strings.Join(names, " ")
+	o := &aptOp{a: a, id: "apt remove " + desc, verb: "remove", done: "removed",
 		args: func(p []string) []string { return append([]string{"remove"}, p...) },
 		todo: func(ctx context.Context) ([]string, error) {
 			pkgs, err := a.read(ctx)
@@ -473,7 +399,7 @@ func (a *Apt) Remove(sel Pkgs, purge bool) Resource {
 			}
 			var out []string
 			for n, p := range pkgs {
-				if p.present(purge) && sel.Match(n) {
+				if p.present(purge) && slices.Contains(names, n) {
 					out = append(out, n)
 				}
 			}
@@ -481,47 +407,10 @@ func (a *Apt) Remove(sel Pkgs, purge bool) Resource {
 			return out, nil
 		}}
 	if purge {
-		o.id = "apt purge " + sel.Desc
+		o.id = "apt purge " + desc
 		o.args = func(p []string) []string { return append([]string{"remove", "--purge"}, p...) }
 	}
 	return o
-}
-
-// InstallDeb is a local .deb installed at its version (a repo's keyring
-// package). A source it adds makes the next Update due.
-func (a *Apt) InstallDeb(path string) Resource {
-	return &aptOp{a: a, id: "apt install " + path, verb: "install", done: "installed", sources: true,
-		args: func([]string) []string { return []string{"install", path} },
-		todo: func(ctx context.Context) ([]string, error) {
-			o, err := run(ctx, a.Exec, Cmd{Name: "dpkg-deb", Args: []string{"--field", path, "Package", "Version"}, Timeout: time.Minute})
-			if err != nil {
-				return nil, err
-			}
-			f := parseFields(o.Out)
-			name, version := f["Package"], f["Version"]
-			if name == "" || version == "" {
-				return nil, fmt.Errorf("%s: no package or version in it", path)
-			}
-			pkgs, err := a.read(ctx)
-			if err != nil {
-				return nil, err
-			}
-			if p := pkgs[name]; p.installed() && p.version == version {
-				return nil, nil
-			}
-			return []string{name + " " + version}, nil
-		}}
-}
-
-// parseFields reads "Key: value" lines.
-func parseFields(out string) map[string]string {
-	m := map[string]string{}
-	for _, l := range strings.Split(out, "\n") {
-		if k, v, ok := strings.Cut(l, ":"); ok {
-			m[strings.TrimSpace(k)] = strings.TrimSpace(v)
-		}
-	}
-	return m
 }
 
 // Repo is an apt source in deb822 form, signed by a key fetched from
@@ -536,8 +425,6 @@ type Repo struct {
 	KeyURL     string
 	// Key is the key itself, in place of KeyURL: one the engine carries.
 	Key []byte
-	// Client fetches the key; nil is one that gives up after a minute.
-	Client *http.Client
 	// KeyringDir is the directory the key goes in, as the host knows it;
 	// "" is /etc/apt/keyrings. It is made when missing.
 	KeyringDir string
@@ -603,11 +490,7 @@ func (r *aptRepo) fetchKey(ctx context.Context) ([]byte, error) {
 	if r.r.Key != nil {
 		return r.r.Key, nil
 	}
-	client := r.r.Client
-	if client == nil {
-		client = &http.Client{Timeout: time.Minute}
-	}
-	key, err := Fetch(ctx, client, r.r.KeyURL, 1<<20)
+	key, err := Fetch(ctx, &http.Client{Timeout: time.Minute}, r.r.KeyURL, 1<<20)
 	if err != nil {
 		return nil, fmt.Errorf("the key for %s: %w", r.r.Name, err)
 	}

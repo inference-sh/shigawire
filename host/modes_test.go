@@ -267,7 +267,7 @@ func TestWhen(t *testing.T) {
 		t.Fatal(r.Name)
 	}
 	// An action stays one through When.
-	w.Resource = &Always{Why: "x"}
+	w.Resource = &Restart{Exec: &fakeExec{}, Name: "x"}
 	if st, _ := w.Check(context.Background()); !st.Action {
 		t.Fatal("When hides the action")
 	}
@@ -366,18 +366,6 @@ func TestApt_Installed(t *testing.T) {
 	apply(t, cmd)
 	if ok, _ := a.Installed(context.Background(), "docker-ce"); !ok {
 		t.Fatal("the command did not invalidate the read")
-	}
-}
-
-func TestApt_LenientUpdate(t *testing.T) {
-	ex := &fakeExec{}
-	a := &Apt{Exec: ex, Root: t.TempDir(), LenientUpdate: true}
-	apply(t, a.Update(0))
-	if got := ex.ran("apt-get"); len(got) != 1 || strings.Contains(got[0], "Error-Mode") {
-		t.Fatal(got)
-	}
-	if st, _ := a.Update(0).Check(context.Background()); !st.Action {
-		t.Fatal("update is not an action")
 	}
 }
 

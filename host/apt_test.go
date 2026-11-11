@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -19,12 +18,11 @@ import (
 // it, apt-get install and remove change it.
 type fakeDpkg struct {
 	pkgs map[string]string // name -> "<status abbrev>\t<version>"
-	debs map[string]string // .deb path -> "name version"
 	ex   *fakeExec
 }
 
 func newFakeDpkg(pkgs map[string]string) *fakeDpkg {
-	d := &fakeDpkg{pkgs: pkgs, debs: map[string]string{}}
+	d := &fakeDpkg{pkgs: pkgs}
 	d.ex = &fakeExec{respond: d.respond}
 	return d
 }
@@ -38,18 +36,12 @@ func (d *fakeDpkg) respond(line string) Output {
 			fmt.Fprintf(&b, "%s\t%s\n", n, d.pkgs[n])
 		}
 		return Output{Out: b.String()}
-	case f[0] == "dpkg-deb":
-		nv := strings.Fields(d.debs[f[2]])
-		return Output{Out: "Package: " + nv[0] + "\nVersion: " + nv[1] + "\n"}
 	case f[0] == "apt-get":
 		args := slices.DeleteFunc(f[1:], func(s string) bool { return strings.HasPrefix(s, "-") || strings.Contains(s, "::") })
 		switch args[0] {
 		case "install":
 			for _, n := range args[1:] {
-				if nv, ok := d.debs[n]; ok {
-					f := strings.Fields(nv)
-					d.pkgs[f[0]] = "ii \t" + f[1]
-				} else if name, v, ok := strings.Cut(n, "="); ok {
+				if name, v, ok := strings.Cut(n, "="); ok {
 					d.pkgs[name] = "ii \t" + v
 				} else {
 					d.pkgs[n] = "ii \t1.0"
@@ -116,8 +108,7 @@ func TestApt_RemoveMatching(t *testing.T) {
 		"nvidia-utils-550-server":         "rc \t550", // config files left
 		"linux-modules-nvidia-570-server": "ii \t6.8",
 	})
-	re := regexp.MustCompile(`^(nvidia-.*-server(-.*)?|libnvidia-.*-server|linux-(modules|objects|signatures)-nvidia-.*)$`)
-	sel := Pkgs{Desc: "the -server driver", Match: re.MatchString}
+	sel := []string{"nvidia-driver-570-server", "libnvidia-compute-570-server", "nvidia-utils-550-server", "linux-modules-nvidia-570-server", "nvidia-absent-server"}
 	a := &Apt{Exec: d.ex}
 	if r := converge(t, a.Remove(sel, true), Changed); r.Msg != "removed libnvidia-compute-570-server linux-modules-nvidia-570-server nvidia-driver-570-server nvidia-utils-550-server" {
 		t.Fatalf("msg %q", r.Msg)
@@ -132,7 +123,7 @@ func TestApt_RemoveMatching(t *testing.T) {
 	// Remove without purge leaves config-file packages alone.
 
 	d2 := newFakeDpkg(map[string]string{"docker-ce": "ii \t27", "containerd.io": "rc \t1"})
-	converge(t, (&Apt{Exec: d2.ex}).Remove(Names("docker-ce", "containerd.io"), false), Changed)
+	converge(t, (&Apt{Exec: d2.ex}).Remove([]string{"docker-ce", "containerd.io"}, false), Changed)
 	if got := d2.ex.ran("apt-get"); len(got) != 1 || !strings.HasSuffix(got[0], " remove docker-ce") {
 		t.Fatalf("ran %v", got)
 	}
@@ -167,43 +158,6 @@ func TestApt_Update(t *testing.T) {
 	}
 	if r := apply(t, a.Update(0)); r.Status != Changed {
 		t.Fatal("maxAge 0 is not every run")
-	}
-}
-
-// UpdateRepo runs when the full update is due, on the repo's source
-// alone, keeping the other sources' lists; the full update is still due
-// after it, though the update hook stamped the lists. When the full
-// update is not due, neither is it.
-func TestApt_UpdateRepo(t *testing.T) {
-	root := t.TempDir()
-	stamp := filepath.Join(root, "var/lib/apt/periodic/update-success-stamp")
-	lists := filepath.Join(root, "var/lib/apt/lists")
-	os.MkdirAll(filepath.Dir(stamp), 0o755)
-	os.MkdirAll(lists, 0o755)
-	os.WriteFile(filepath.Join(lists, "x_Packages"), nil, 0o644)
-	ex := &fakeExec{respond: func(line string) Output {
-		if strings.HasPrefix(line, "apt-get") {
-			os.WriteFile(stamp, nil, 0o644)
-		}
-		return Output{}
-	}}
-	old := time.Now().Add(-2 * time.Hour)
-	os.WriteFile(stamp, nil, 0o644)
-	os.Chtimes(stamp, old, old)
-	a := &Apt{Exec: ex, Root: root}
-	repo := Repo{Name: "inferencesh", URIs: []string{"https://dist.inference.sh/apt"}, Suites: []string{"stable"}}
-	if r := converge(t, a.UpdateRepo(repo, time.Hour), Changed); r.Msg != "updated inferencesh" {
-		t.Fatalf("msg %q", r.Msg)
-	}
-	got := ex.ran("apt-get")
-	if len(got) != 1 || !strings.Contains(got[0], "-o Dir::Etc::SourceList=/etc/apt/sources.list.d/inferencesh.sources -o Dir::Etc::SourceParts=/dev/null -o APT::Get::List-Cleanup=0 -o APT::Update::Error-Mode=any update") {
-		t.Fatalf("ran %v", got)
-	}
-	if r := converge(t, a.Update(time.Hour), Changed); r.Msg != "updated: inferencesh updated alone" {
-		t.Fatalf("full update after the repo's: %q", r.Msg)
-	}
-	if st, err := a.UpdateRepo(repo, time.Hour).Check(context.Background()); err != nil || !st.InPlace {
-		t.Fatalf("lists fresh: %+v %v", st, err)
 	}
 }
 
@@ -339,27 +293,6 @@ func TestApt_UpdateNothingNew(t *testing.T) {
 	}
 }
 
-// A keyring .deb installed makes the update after it due, whatever the
-// times of the files it wrote (a .deb's carry its build's).
-func TestApt_InstallDeb(t *testing.T) {
-	root := t.TempDir()
-	lists := filepath.Join(root, "var/lib/apt/lists")
-	os.MkdirAll(lists, 0o755)
-	os.WriteFile(filepath.Join(lists, "x_Packages"), nil, 0o644)
-	d := newFakeDpkg(map[string]string{"cuda-keyring": "ii \t1.0-1"})
-	d.debs["/work/cuda-keyring.deb"] = "cuda-keyring 1.1-1"
-	a := &Apt{Exec: d.ex, Root: root}
-	if st, _ := a.Update(time.Hour).Check(context.Background()); !st.InPlace {
-		t.Fatalf("fresh lists: %+v", st)
-	}
-	if r := converge(t, a.InstallDeb("/work/cuda-keyring.deb"), Changed); r.Msg != "installed cuda-keyring 1.1-1" {
-		t.Fatalf("msg %q", r.Msg)
-	}
-	if r := converge(t, a.Update(time.Hour), Changed); r.Msg != "updated: a source changed" {
-		t.Fatalf("after the keyring: %q", r.Msg)
-	}
-}
-
 const testKey = "-----BEGIN PGP PUBLIC KEY BLOCK-----\nmQINBF\n-----END PGP PUBLIC KEY BLOCK-----\n"
 
 func TestApt_Repo(t *testing.T) {
@@ -431,7 +364,7 @@ func TestApt_RemoveWhatAFailedInstallLeft(t *testing.T) {
 		"nvidia-compute-580":       "rc \t580",
 		"nvidia-gone-580":          "pn \t",
 	})
-	sel := Pkgs{Desc: "nvidia-*", Match: func(n string) bool { return strings.HasPrefix(n, "nvidia-") }}
+	sel := []string{"nvidia-dkms-580-server", "nvidia-kernel-580-server", "nvidia-utils-580-server", "nvidia-compute-580", "nvidia-gone-580"}
 	if r := converge(t, (&Apt{Exec: d.ex}).Remove(sel, false), Changed); r.Msg != "removed nvidia-dkms-580-server nvidia-kernel-580-server nvidia-utils-580-server" {
 		t.Fatalf("remove: %q", r.Msg)
 	}

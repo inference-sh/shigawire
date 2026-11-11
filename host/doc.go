@@ -26,10 +26,9 @@
 //   - Verify checks each task, runs no action and no handler, and fails
 //     when a task drifted or its Check failed.
 //
-// Lazy, When, Assert and Always fit what a play needs between resources:
-// one made from what the host is when the play reaches it, one only while
-// a condition holds, a condition it stops at (or warns on), a change made
-// outside it. Validated is a handler that validates a config before a
+// Lazy, When and Assert fit what a play needs between resources: one
+// made from what the host is when the play reaches it, one only while a
+// condition holds, a condition it stops at (or warns on). Validated is a handler that validates a config before a
 // reload, and puts back the files the run wrote when it does not pass.
 // A Check or an Apply that returns a Warning is reported warn and the
 // play goes on.
@@ -37,7 +36,7 @@
 // Commands run through an Exec, so tests stand a fake in for the host:
 // package hosttest has one, and a temporary root to point paths under.
 // The package keeps no global state: each resource is a value that holds
-// what it acts on. Beyond the standard library it uses only x/sys.
+// what it acts on. It uses only the standard library.
 //
 // The resources are for Linux: apt, dpkg and systemd, numeric owners, and
 // commands in process groups. The package builds elsewhere, where an owner

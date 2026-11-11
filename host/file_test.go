@@ -212,3 +212,27 @@ func TestSymlink(t *testing.T) {
 		t.Fatal("the earlier aside is gone")
 	}
 }
+
+// A seeded file is written when missing, then left: its content is the
+// program's (an engine that updated itself), only mode and owner put right.
+func TestFileSeed(t *testing.T) {
+	dir := t.TempDir()
+	src, path := filepath.Join(dir, "src"), filepath.Join(dir, "bin")
+	os.WriteFile(src, []byte("v1"), 0o644)
+	f := &File{Path: path, From: src, Mode: 0o755, Seed: true}
+	converge(t, f, Changed)
+	os.WriteFile(path, []byte("v2, self-updated"), 0o755)
+	if r := apply(t, f); r.Status != OK {
+		t.Fatalf("a newer file: %s %s", r.Status, r.Msg)
+	}
+	os.Chmod(path, 0o777)
+	if r := apply(t, f); r.Status != Changed {
+		t.Fatalf("mode: %s", r.Status)
+	}
+	if b, _ := os.ReadFile(path); string(b) != "v2, self-updated" {
+		t.Fatalf("content %q", b)
+	}
+	if fi, _ := os.Stat(path); fi.Mode().Perm() != 0o755 {
+		t.Fatalf("mode %v", fi.Mode())
+	}
+}

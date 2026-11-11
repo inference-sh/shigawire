@@ -62,16 +62,3 @@ func (a *Assert) Check(ctx context.Context) (State, error) {
 
 // Apply is never called: Check either holds or fails.
 func (a *Assert) Apply(context.Context, State) (Result, error) { return unchanged("holds") }
-
-// Always is an action that changes nothing itself: it stands for a change
-// made outside the play (a config another step wrote), so that the
-// handlers its task notifies run.
-type Always struct {
-	Why string
-}
-
-func (a *Always) ID() string                           { return "changed: " + a.Why }
-func (a *Always) Check(context.Context) (State, error) { return action("%s", a.Why) }
-func (a *Always) Apply(context.Context, State) (Result, error) {
-	return changed("%s", a.Why)
-}

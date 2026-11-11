@@ -2,12 +2,48 @@ package host
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// Passwd is a user's entry in the system's user database.
+type Passwd struct {
+	Name     string
+	UID, GID int
+	Comment  string
+	Home     string
+	Shell    string
+}
+
+// LookupPasswd is name's entry as getent passwd has it (NSS: /etc/passwd,
+// LDAP), nil when there is none.
+func LookupPasswd(ctx context.Context, x Exec, name string) (*Passwd, error) {
+	o := x.Run(ctx, Cmd{Name: "getent", Args: []string{"passwd", name}, Timeout: time.Minute})
+	if o.Code == 2 { // getent: key not found
+		return nil, nil
+	}
+	if o.Err != nil {
+		return nil, fmt.Errorf("getent passwd %s: %w", name, o.Err)
+	}
+	return parsePasswd(o.Out)
+}
+
+func parsePasswd(line string) (*Passwd, error) {
+	f := strings.Split(strings.TrimSpace(line), ":")
+	if len(f) != 7 {
+		return nil, fmt.Errorf("getent passwd: %q is not a passwd entry", strings.TrimSpace(line))
+	}
+	uid, err1 := strconv.Atoi(f[2])
+	gid, err2 := strconv.Atoi(f[3])
+	if err := errors.Join(err1, err2); err != nil {
+		return nil, fmt.Errorf("getent passwd %s: %w", f[0], err)
+	}
+	return &Passwd{Name: f[0], UID: uid, GID: gid, Comment: f[4], Home: f[5], Shell: f[6]}, nil
+}
 
 // GroupEntry is a group's entry in the system's group database.
 type GroupEntry struct {

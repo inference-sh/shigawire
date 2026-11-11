@@ -12,7 +12,7 @@ import (
 //
 // A state (File, Line, Service, an Apt package) is in place or not: Check
 // reads the host, and Apply acts on what that Check found. An action
-// (Restart, DaemonReload, Always, a Command without a guard) has no state
+// (Restart, DaemonReload, a Command without a guard) has no state
 // to read: its Check reports drift with State.Action set, every time, and
 // its Apply always acts. An action is a handler, or a task meant to run
 // every time.
@@ -211,24 +211,9 @@ type Play struct {
 
 // Runner runs plays: Run applies one, Plan and Verify only read the host.
 type Runner struct {
-	// OnStart, when set, gets each task's and handler's name as it starts.
-	OnStart func(name string)
-	// OnProgress, when set, gets what a long task says it has done so far
-	// (Progress), for the line that follows it.
-	OnProgress func(detail string)
 	// OnResult, when set, gets each task's and handler's result as it
 	// lands.
 	OnResult func(Result)
-}
-
-type progressKey struct{}
-
-// Progress tells the Runner's OnProgress how far a long Check or Apply
-// is ("1,240,000 files, 85,000/s"). It does nothing when no one listens.
-func Progress(ctx context.Context, format string, a ...any) {
-	if f, ok := ctx.Value(progressKey{}).(func(string)); ok {
-		f(fmt.Sprintf(format, a...))
-	}
 }
 
 // mode is what a run does with each resource.
@@ -307,9 +292,6 @@ func (r *Runner) run(ctx context.Context, p Play, m mode) error {
 	if err := p.validate(); err != nil {
 		return err
 	}
-	if r.OnProgress != nil {
-		ctx = context.WithValue(ctx, progressKey{}, r.OnProgress)
-	}
 	if m == modeApply {
 		ctx = withSaves(ctx, p)
 	}
@@ -324,7 +306,7 @@ func (r *Runner) run(ctx context.Context, p Play, m mode) error {
 			}
 			continue
 		}
-		res := pr.one(ctx, pr.start(t.name()), t.Resource)
+		res := pr.one(ctx, t.name(), t.Resource)
 		if res.Status == Failed && t.IgnoreErrors {
 			res.Status = Ignored
 		}
@@ -347,13 +329,6 @@ func (r *Runner) run(ctx context.Context, p Play, m mode) error {
 		err = errors.Join(err, fmt.Errorf("%d not in place, %d unknown", pr.drifted, pr.unknown))
 	}
 	return err
-}
-
-func (pr *playRun) start(name string) string {
-	if pr.r.OnStart != nil {
-		pr.r.OnStart(name)
-	}
-	return name
 }
 
 func (pr *playRun) report(res Result) Result {
@@ -394,7 +369,7 @@ func (pr *playRun) flush(ctx context.Context) error {
 				runH(n)
 			}
 		}
-		name := pr.start(h.name())
+		name := h.name()
 		var res Result
 		if i := slices.IndexFunc(h.Needs, func(n *Handler) bool { return pr.failed[n] }); i >= 0 {
 			res = Result{Name: name, Status: Failed, Err: fmt.Errorf("not run: handler %q failed", h.Needs[i].name())}
