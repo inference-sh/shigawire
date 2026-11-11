@@ -1,0 +1,52 @@
+name: Release
+
+# A v* tag publishes the module (proxy.golang.org) and a GitHub release with
+# static shiga binaries and their checksums.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test ./...
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # gh release create
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Build
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          mkdir -p dist
+          for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            os=${t%/*} arch=${t#*/}
+            dir="shiga_${GITHUB_REF_NAME}_${os}_${arch}"
+            mkdir -p "dist/$dir"
+            GOOS=$os GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o "dist/$dir/shiga" ./cmd/shiga
+            cp LICENSE README.md "dist/$dir/"
+            tar -C dist -czf "dist/$dir.tar.gz" "$dir"
+          done
+          (cd dist && sha256sum *.tar.gz > checksums.txt)
+      - name: Warm Go module proxy
+        run: curl -sf "https://proxy.golang.org/github.com/inference-sh/shigawire/@v/${GITHUB_REF_NAME}.info" > /dev/null || true
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes dist/*.tar.gz dist/checksums.txt

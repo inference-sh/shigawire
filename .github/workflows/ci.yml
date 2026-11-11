@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [dev]
+  pull_request:
+    branches: [dev]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test ./...
+      - name: Static builds
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          for t in linux/amd64 linux/arm64 darwin/arm64; do
+            GOOS=${t%/*} GOARCH=${t#*/} go build -o /dev/null ./...
+          done
+
+  trivy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Trivy scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: 1
+          format: table
+
+  # Bot coverage PRs add behavior tests only: no source edits (cc0d2be in
+  # sdk-py reverted src/ inside a "tests only" batch) and no per-version
+  # suites that re-assert generated models.
+  bot-test-policy:
+    if: github.event_name == 'pull_request' && github.event.pull_request.user.login == 'cursor[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          non_test=$(git diff --name-only --no-renames "$BASE"..."$HEAD_SHA" | grep -vE '(_test\.go$|(^|/)testdata/)' || true)
+          versioned=$(git diff --name-only --no-renames --diff-filter=A "$BASE"..."$HEAD_SHA" | grep -E '_v[0-9][^/]*_test\.go$' || true)
+          source_text=$(git diff -U0 --no-renames "$BASE"..."$HEAD_SHA" -- '*_test.go' | grep -E '^\+' | grep -vE '^\+\+\+' | grep -E 'ReadFile\([^)]*\.go"|go/parser|parser\.Parse(File|Dir)' || true)
+          if [ -n "$non_test" ]; then echo "::error::bot PRs may only change *_test.go and testdata/:"; echo "$non_test"; fi
+          if [ -n "$versioned" ]; then echo "::error::bot PRs must not add per-version *_v0*_test files:"; echo "$versioned"; fi
+          if [ -n "$source_text" ]; then echo "::error::bot PRs must not add tests that read Go source as text (any .go file):"; echo "$source_text"; fi
+          [ -z "$non_test$versioned$source_text" ]

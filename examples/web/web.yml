@@ -1,0 +1,93 @@
+# A web server: nginx serving one site, ufw letting in SSH and HTTP(S)
+# only, and a deploy user who owns the site's files.
+#
+#   shiga plan  examples/web/web.yml --var DOMAIN=example.com
+#   shiga apply examples/web/web.yml --var DOMAIN=example.com --var DEPLOY_KEY="ssh-ed25519 AAAA... me@laptop"
+name: web
+vars:
+  DOMAIN: example.com
+  DEPLOY_USER: deploy
+  DEPLOY_KEY: ""
+  SSH_PORT: 22
+
+steps:
+  - name: user
+    tags: [base]
+    tasks:
+      - name: deploy user
+        user:
+          name: ${DEPLOY_USER}
+          shell: /bin/bash
+          groups: [www-data]
+      - name: ~/.ssh
+        dir: {path: "/home/${DEPLOY_USER}/.ssh", mode: "0700", owner: "${DEPLOY_USER}"}
+      - name: authorized key
+        file:
+          path: /home/${DEPLOY_USER}/.ssh/authorized_keys
+          content: "${DEPLOY_KEY}\n"
+          mode: "0600"
+          owner: ${DEPLOY_USER}
+        when: ${DEPLOY_KEY}
+
+  - name: firewall
+    tags: [base]
+    tasks:
+      - name: ufw installed
+        apt: {name: ufw, update_cache: true}
+      - name: ssh and web only
+        ufw:
+          default: {incoming: deny, outgoing: allow}
+          rules:
+            - {rule: limit, port: "${SSH_PORT}", proto: tcp, comment: ssh}
+            - {rule: allow, port: "80,443", proto: tcp, comment: web}
+          enabled: true
+
+  - name: nginx
+    tasks:
+      - name: nginx installed
+        apt: {name: nginx, update_cache: true}
+      - name: no default site
+        absent: {path: /etc/nginx/sites-enabled/default}
+        notify: reload nginx
+      - name: site root
+        dir: {path: "/var/www/${DOMAIN}", owner: "${DEPLOY_USER}", group: www-data, mode: "0755"}
+      - name: security headers snippet
+        copy: {src: security-headers.conf, dest: /etc/nginx/snippets/security-headers.conf, parents: true}
+        notify: reload nginx
+      - name: site config
+        file:
+          path: /etc/nginx/sites-available/${DOMAIN}
+          content: |
+            server {
+                listen 80;
+                listen [::]:80;
+                server_name ${DOMAIN};
+                root /var/www/${DOMAIN};
+                index index.html;
+                include /etc/nginx/snippets/security-headers.conf;
+
+                location / {
+                    try_files $uri $uri/ =404;
+                }
+            }
+        notify: reload nginx
+      - name: site enabled
+        symlink:
+          path: /etc/nginx/sites-enabled/${DOMAIN}
+          target: /etc/nginx/sites-available/${DOMAIN}
+        notify: reload nginx
+      - name: nginx running
+        systemd: {name: nginx, enabled: true, state: started}
+    handlers:
+      - name: reload nginx
+        validate_reload:
+          validate: [nginx, -t, -q]
+          service: nginx
+
+  - name: health
+    when: mode == verify
+    tasks:
+      - name: nginx answers on port 80
+        assert:
+          cmd: [curl, -s, -o, /dev/null, -w, "%{http_code}", -H, "Host: ${DOMAIN}", http://127.0.0.1/]
+          regex: '^(200|301|302|403)$'
