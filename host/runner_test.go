@@ -190,12 +190,12 @@ func TestLazy(t *testing.T) {
 	}
 }
 
-func TestAssertAndAction(t *testing.T) {
+func TestAssertAndAlways(t *testing.T) {
 	var log []string
 	h := &Handler{Name: "h", Resource: &stub{id: "h", log: &log}}
 	p := Play{Tasks: []Task{
 		{Name: "blank", Resource: &Assert{Name: "blank", Holds: func(context.Context) error { return nil }}},
-		{Name: "key", Notify: []*Handler{h}, Resource: &Restart{Exec: &fakeExec{}, Name: "key"}},
+		{Name: "key", Notify: []*Handler{h}, Resource: &Always{Why: "the key changed"}},
 		{Name: "stop", Resource: &Assert{Name: "stop", Holds: func(context.Context) error { return errors.New("not blank") }}},
 		{Name: "never", Resource: &stub{id: "never", log: &log}},
 	}, Handlers: []*Handler{h}}

@@ -12,7 +12,7 @@ import (
 //
 // A state (File, Line, Service, an Apt package) is in place or not: Check
 // reads the host, and Apply acts on what that Check found. An action
-// (Restart, DaemonReload, a Command without a guard) has no state
+// (Restart, DaemonReload, Always, a Command without a guard) has no state
 // to read: its Check reports drift with State.Action set, every time, and
 // its Apply always acts. An action is a handler, or a task meant to run
 // every time.
