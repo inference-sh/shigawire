@@ -10,8 +10,9 @@ import (
 // Sysctl is a kernel parameter set in a sysctl.d drop-in and in the
 // running kernel. The drop-in holds "key = value" in place of any line
 // that sets the key; when the line changed, or the kernel has another
-// value, sysctl -p loads the drop-in (every key in it), and the kernel's
-// value is read again: one that still differs is an error.
+// value, sysctl -w sets the key alone (the drop-in's other keys are left
+// to their own tasks), and the kernel's value is read again: one that
+// still differs is an error.
 type Sysctl struct {
 	Exec Exec
 	// Path is the drop-in, as the host knows it
@@ -85,7 +86,8 @@ func (s *Sysctl) Apply(ctx context.Context, st State) (Result, error) {
 			return Result{}, err
 		}
 	}
-	if _, err := run(ctx, s.Exec, short("sysctl", "-p", s.Path)); err != nil {
+	set := s.Key + "=" + s.Value
+	if _, err := run(ctx, s.Exec, short("sysctl", "-w", set)); err != nil {
 		return Result{}, err
 	}
 	got, err := s.live(ctx)
@@ -93,7 +95,7 @@ func (s *Sysctl) Apply(ctx context.Context, st State) (Result, error) {
 		return Result{}, err
 	}
 	if got != oneSpaced(s.Value) {
-		return Result{}, fmt.Errorf("sysctl -p %s ran, and the kernel has %s = %q", s.Path, s.Key, got)
+		return Result{}, fmt.Errorf("sysctl -w %s ran, and the kernel has %s = %q", set, s.Key, got)
 	}
 	return changed("%s", st.Drift)
 }

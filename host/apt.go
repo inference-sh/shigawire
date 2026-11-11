@@ -30,6 +30,9 @@ type Apt struct {
 	// sourcesNew: a resource of a's added or changed a source or a key
 	// since the last update, which is due now whatever the lists' age.
 	sourcesNew bool
+	// ranUpdate: an update of a's succeeded in this run, so an Update with
+	// maxAge 0 is not due again (unless sourcesNew).
+	ranUpdate bool
 	// sleep waits between tries; nil waits for real (tests make it instant).
 	sleep func(ctx context.Context, d time.Duration) error
 }
@@ -186,7 +189,8 @@ func isInstalled(pkgs map[string]pkgState, n string) bool {
 	return p.installed() && (!pinned || p.version == version)
 }
 
-// Update is the package lists, at most maxAge old (0: updated every run),
+// Update is the package lists, at most maxAge old (0: updated once each
+// run, by the first Update that runs),
 // and updated whatever their age when a source or a key changed since the
 // last update: through a's own Repo, or by its file's time. A fetch that
 // fails fails the update (APT::Update::Error-Mode=any; apt-get itself
@@ -231,10 +235,10 @@ func (u *aptUpdate) Check(context.Context) (State, error) {
 // does).
 func (u *aptUpdate) due() (bool, string) {
 	switch {
-	case u.maxAge == 0:
-		return true, ""
 	case u.a.sourcesNew:
 		return true, "a source changed"
+	case u.maxAge == 0:
+		return !u.a.ranUpdate, ""
 	}
 	// A fresh image's lists are removed and the directory left, as new as
 	// the image: its age says nothing.
@@ -308,7 +312,7 @@ func (u *aptUpdate) Apply(ctx context.Context, st State) (Result, error) {
 	// An update that fetched nothing new leaves the lists' directory as it
 	// was, and without Ubuntu's stamp hook a stamp is not renewed: dated
 	// here, the lists are as fresh as the update that just succeeded.
-	u.a.sourcesNew = false
+	u.a.sourcesNew, u.a.ranUpdate = false, true
 	now := time.Now()
 	for _, p := range listsStamps() {
 		if err := os.Chtimes(u.a.path(p), now, now); err != nil && !os.IsNotExist(err) {

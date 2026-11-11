@@ -26,7 +26,7 @@ type aptArgs struct {
 	// cache_valid_time says they are new enough.
 	UpdateCache bool `yaml:"update_cache"`
 	// CacheValidTime is how old the lists may be before an update
-	// ("1h"); unset is 0, updated every time.
+	// ("1h"); unset is 0, updated once in a run.
 	CacheValidTime time.Duration `yaml:"cache_valid_time"`
 }
 

@@ -156,8 +156,24 @@ func TestApt_Update(t *testing.T) {
 	if r := converge(t, u, Changed); !strings.HasPrefix(r.Msg, "updated: lists 2h") {
 		t.Fatalf("msg %q", r.Msg)
 	}
-	if r := apply(t, a.Update(0)); r.Status != Changed {
+	// A new run (its own Apt) with maxAge 0 updates, whatever the lists' age.
+	if r := apply(t, (&Apt{Exec: ex, Root: root}).Update(0)); r.Status != Changed {
 		t.Fatal("maxAge 0 is not every run")
+	}
+}
+
+// Update with maxAge 0 runs once in a run, however many tasks ask for
+// it; a source changed after it makes it due again.
+func TestApt_UpdateOncePerRun(t *testing.T) {
+	ex := &fakeExec{}
+	a := &Apt{Exec: ex, Root: t.TempDir()}
+	got, err := runMode((*Runner).Run, Play{Tasks: []Task{{Resource: a.Update(0)}, {Resource: a.Update(0)}}})
+	if err != nil || statuses(got) != "apt update=changed apt update=ok" || len(ex.ran("apt-get")) != 1 {
+		t.Fatalf("%s %v, ran %v", statuses(got), err, ex.calls)
+	}
+	a.sourcesNew = true
+	if r := apply(t, a.Update(0)); r.Status != Changed || r.Msg != "updated: a source changed" {
+		t.Fatalf("%s %q", r.Status, r.Msg)
 	}
 }
 

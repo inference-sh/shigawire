@@ -160,26 +160,17 @@ func TestGroup(t *testing.T) {
 }
 
 func TestSysctl(t *testing.T) {
-	h, env := newHost(t)
-	kernel := map[string]string{"net.ipv4.ip_forward": "0", "net.ipv4.ip_local_port_range": "32768\t60999"}
-	h.Exec.Respond = func(line string) host.Output {
-		f := strings.Fields(line)
-		switch {
-		case len(f) == 3 && f[1] == "-n":
-			return hosttest.Out(kernel[f[2]] + "\n")
-		case len(f) == 3 && f[1] == "-p":
-			for _, l := range strings.Split(h.Read(f[2]), "\n") {
-				if k, v, ok := strings.Cut(l, "="); ok {
-					kernel[strings.TrimSpace(k)] = strings.TrimSpace(v)
-				}
-			}
-		}
-		return host.Output{}
-	}
-	h.Write("/etc/sysctl.d/99-shigawire.conf", "net.ipv4.ip_forward=0\n")
+	h := sim.New(t)
+	env := module.NewEnv(h.Exec, h.Root)
+	h.Sysctl["net.ipv4.ip_local_port_range"] = "32768\t60999"
+	h.Write("/etc/sysctl.d/99-shigawire.conf", "net.ipv4.ip_forward=0\nvm.overcommit_memory = 1\n")
 	hosttest.Converge(t, build(t, env, "sysctl", map[string]any{"name": "net.ipv4.ip_forward", "value": "1"}), host.Changed)
-	if got := h.Read("/etc/sysctl.d/99-shigawire.conf"); got != "net.ipv4.ip_forward = 1\n" || kernel["net.ipv4.ip_forward"] != "1" {
-		t.Fatalf("%q %v", got, kernel)
+	if got := h.Read("/etc/sysctl.d/99-shigawire.conf"); got != "net.ipv4.ip_forward = 1\nvm.overcommit_memory = 1\n" || h.Sysctl["net.ipv4.ip_forward"] != "1" {
+		t.Fatalf("%q %v", got, h.Sysctl)
+	}
+	// The key alone is set: the drop-in's other keys are their own tasks'.
+	if h.Sysctl["vm.overcommit_memory"] != "" || len(h.Exec.Ran("sysctl -p")) != 0 {
+		t.Fatalf("loaded the whole drop-in: %v %v", h.Sysctl, h.Exec.Ran("sysctl"))
 	}
 	// The kernel's tab-separated value is the same value.
 	h.Write("/etc/sysctl.d/90-ports.conf", "net.ipv4.ip_local_port_range = 32768 60999\n")
@@ -187,9 +178,9 @@ func TestSysctl(t *testing.T) {
 		t.Fatalf("%s %s", r.Status, r.Msg)
 	}
 	// A kernel that does not take the value: an error, not a change each run.
-	h.Exec.On("sysctl -p", host.Output{})
-	kernel["vm.swappiness"] = "60"
-	got, err := play(hosttest.Apply, host.Task{Resource: build(t, env, "sysctl", map[string]any{"name": "vm.swappiness", "value": "10"})})
+	h.Exec.On("sysctl -w", host.Output{})
+	h.Sysctl["vm.swappiness"] = "60"
+	got, err := hosttest.Run(hosttest.Apply, host.Play{Tasks: []host.Task{{Resource: build(t, env, "sysctl", map[string]any{"name": "vm.swappiness", "value": "10"})}}})
 	if err == nil || !strings.Contains(got[0].Msg, `the kernel has vm.swappiness = "60"`) {
 		t.Fatal(hosttest.Statuses(got), err)
 	}
