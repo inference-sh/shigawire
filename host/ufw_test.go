@@ -22,3 +22,20 @@ func TestUFWTuples(t *testing.T) {
 		t.Fatal(v6)
 	}
 }
+
+// Two rules that differ only in action or comment are one rule to ufw:
+// the second would update the first, every run.
+func TestUFWOneRuleTwice(t *testing.T) {
+	u := &UFW{Rules: []UFWRule{
+		{Action: "allow", Proto: "tcp", Port: "80"},
+		{Action: "limit", Proto: "tcp", Port: "22"},
+		{Action: "allow", Proto: "tcp", Port: "22", Comment: "ssh"},
+	}}
+	if err := u.Validate(); err == nil || err.Error() != "ufw rules 2 and 3 are one rule to ufw (they differ only in action or comment)" {
+		t.Fatal(err)
+	}
+	u.Rules[2].Proto = "udp"
+	if err := u.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}

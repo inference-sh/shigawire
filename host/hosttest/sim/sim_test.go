@@ -1,6 +1,9 @@
 package sim_test
 
 import (
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -86,5 +89,76 @@ func TestAnswers(t *testing.T) {
 	h.Fallback = func(c host.Cmd) host.Output { return hosttest.Out("fallback " + c.Name) }
 	if o := run("tailscale", "ip"); o.Out != "fallback tailscale" {
 		t.Fatal(o)
+	}
+}
+
+// ufw keeps one rule for "limit 22/tcp" and "allow 22/tcp" and updates
+// it in place, so two plays that list the same port with other actions
+// each see the other's rule as drift that names both actions. The rules
+// files are those ufw 0.36.2 wrote on Ubuntu 24.04 for examples/web.
+func TestUFWActionIsPartOfTheRule(t *testing.T) {
+	h := sim.New(t)
+	h.Run(host.Cmd{Name: "apt-get", Args: []string{"-y", "install", "ufw"}})
+	for _, f := range []string{"user.rules", "user6.rules"} {
+		b, err := os.ReadFile(filepath.Join("testdata", f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.Write("/etc/ufw/"+f, string(b))
+	}
+	ufw := func(r host.UFWRule) *host.UFW {
+		return &host.UFW{Exec: h.Exec, Root: h.Root, Rules: []host.UFWRule{r}}
+	}
+	allow := ufw(host.UFWRule{Action: "allow", Proto: "tcp", Port: "22"})
+	limit := ufw(host.UFWRule{Action: "limit", Proto: "tcp", Port: "22", Comment: "ssh"})
+	tuples := func(f string) []string {
+		var out []string
+		for _, l := range strings.Split(h.Read(f), "\n") {
+			if strings.HasPrefix(l, "### tuple ###") {
+				out = append(out, l)
+			}
+		}
+		return out
+	}
+	before := tuples("/etc/ufw/user.rules")
+
+	// The web play's limit is in place; an allow of the same port is not.
+	if st, err := limit.Check(t.Context()); err != nil || !st.InPlace {
+		t.Fatalf("limit: %+v %v", st, err)
+	}
+	for _, m := range []hosttest.Mode{hosttest.Plan, hosttest.Verify} {
+		got, _ := hosttest.Run(m, host.Play{Tasks: []host.Task{{Resource: allow}}})
+		if want := `allow in proto tcp from any to any port 22 (limit -> allow, comment "ssh" -> none)`; got[0].Status != host.Changed || got[0].Msg != want {
+			t.Fatalf("%s %q, want changed %q", got[0].Status, got[0].Msg, want)
+		}
+	}
+	if r := hosttest.Converge(t, allow, host.Changed); !strings.Contains(r.Msg, "limit -> allow") {
+		t.Fatal(r.Msg)
+	}
+	// Updated in place: the same rules, in the same order, 22 allowed, its
+	// limit lines gone.
+	after := tuples("/etc/ufw/user.rules")
+	if len(after) != len(before) || after[1] != "### tuple ### allow tcp 22 0.0.0.0/0 any 0.0.0.0/0 in" || after[0] != before[0] || after[2] != before[2] {
+		t.Fatalf("%q, was %q", after, before)
+	}
+	if strings.Contains(h.Read("/etc/ufw/user.rules"), "--dport 22 -m conntrack") || len(tuples("/etc/ufw/user6.rules")) != 3 {
+		t.Fatal(h.Read("/etc/ufw/user.rules"), h.Read("/etc/ufw/user6.rules"))
+	}
+	// Deleting a limit of 22 leaves the allow: ufw delete matches the
+	// action.
+	if st, err := ufw(host.UFWRule{Action: "limit", Proto: "tcp", Port: "22", Absent: true}).Check(t.Context()); err != nil || !st.InPlace {
+		t.Fatalf("absent limit: %+v %v", st, err)
+	}
+	// And back.
+	if r := hosttest.Converge(t, limit, host.Changed); r.Msg != `limit in proto tcp from any to any port 22 comment ssh (allow -> limit, comment none -> "ssh")` {
+		t.Fatal(r.Msg)
+	}
+	if got := tuples("/etc/ufw/user.rules"); !slices.Equal(got, before) {
+		t.Fatalf("%q, want %q", got, before)
+	}
+	// Deleting it with no comment deletes it, as ufw delete does.
+	hosttest.Converge(t, ufw(host.UFWRule{Action: "limit", Proto: "tcp", Port: "22", Absent: true}), host.Changed)
+	if got := tuples("/etc/ufw/user6.rules"); len(got) != 2 || strings.Contains(h.Read("/etc/ufw/user6.rules"), "--dport 22") {
+		t.Fatal(h.Read("/etc/ufw/user6.rules"))
 	}
 }

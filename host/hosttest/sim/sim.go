@@ -655,24 +655,72 @@ func (h *Host) ufw(a []string) host.Output {
 		if t == "" {
 			continue
 		}
-		file := h.Read(ufwFiles[i])
+		lines := strings.Split(h.Read(ufwFiles[i]), "\n")
+		want := ufwTupleOf(t)
+		at := slices.IndexFunc(lines, func(l string) bool {
+			got, ok := strings.CutPrefix(l, "### tuple ### ")
+			return ok && ufwTupleOf(got).key == want.key
+		})
+		var got ufwTuple
+		if at >= 0 {
+			got = ufwTupleOf(strings.TrimPrefix(lines[at], "### tuple ### "))
+		}
 		line := "### tuple ### " + t
-		has := slices.Contains(strings.Split(file, "\n"), line)
 		switch {
-		case del && has:
-			file = strings.Replace(file, line+"\n", "", 1)
+		case del && at >= 0 && got.action == want.action && (want.comment == "" || got.comment == want.comment):
+			end := ufwRuleEnd(lines, at)
+			if end < len(lines) && lines[end] == "" {
+				end++
+			}
+			lines = slices.Delete(lines, at, end)
 			out = append(out, "Rule deleted")
 		case del:
 			out = append(out, "Could not delete non-existent rule")
-		case has:
+		case at >= 0 && got == want:
 			out = append(out, "Skipping adding existing rule")
+		case at >= 0:
+			// Another action or comment: ufw updates the rule in place.
+			lines = slices.Replace(lines, at, ufwRuleEnd(lines, at), line)
+			out = append(out, "Rule updated")
 		default:
-			file = strings.Replace(file, "### END RULES ###", line+"\n\n### END RULES ###", 1)
+			end := slices.Index(lines, "### END RULES ###")
+			lines = slices.Insert(lines, end, line, "")
 			out = append(out, "Rule added")
 		}
-		h.Write(ufwFiles[i], file)
+		if i == 1 {
+			out[len(out)-1] += " (v6)"
+		}
+		h.Write(ufwFiles[i], strings.Join(lines, "\n"))
 	}
 	return ok(strings.Join(out, "\n") + "\n")
+}
+
+// ufwRuleEnd is the end of the rule whose tuple line is lines[at]: the
+// tuple and the iptables lines ufw writes under it, up to a blank line or
+// the next "###" line.
+func ufwRuleEnd(lines []string, at int) int {
+	end := at + 1
+	for end < len(lines) && lines[end] != "" && !strings.HasPrefix(lines[end], "###") {
+		end++
+	}
+	return end
+}
+
+// ufwTuple is a "### tuple ###" line as ufw matches rules: the action;
+// all but the action and the comment, which ufw tells rules apart by;
+// the comment.
+type ufwTuple struct{ action, key, comment string }
+
+func ufwTupleOf(t string) ufwTuple {
+	f := strings.Fields(t)
+	if len(f) == 0 {
+		return ufwTuple{}
+	}
+	var c string
+	if last := f[len(f)-1]; strings.HasPrefix(last, "comment=") {
+		c, f = last, f[:len(f)-1]
+	}
+	return ufwTuple{f[0], strings.Join(f[1:], " "), c}
 }
 
 // parseUFWRule reads ufw's rule syntax as host.UFW writes it: ACTION

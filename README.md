@@ -118,6 +118,8 @@ Exit codes: 0 ok, 1 failure, 2 drift (`verify`) or changes (`--detailed-exitcode
 | containers | `compose` / `docker_compose`, `docker_swarm` |
 | commands and checks | `command` / `shell` (with `creates` / `unless`), `query`, `probe`, `assert`, `fail` |
 
+The `ufw` module adds and updates the rules it lists and leaves other rules alone. ufw keeps one rule per port, protocol, addresses, interface and direction, whatever its action, so a listed `allow 22/tcp` where ufw has `limit 22/tcp` is drift reported as `limit -> allow`, and apply updates that rule in place.
+
 Names follow Ansible's where they mean the same thing. Every module refuses unknown arguments by name. Reference: [docs/modules.md](docs/modules.md).
 
 ## Compared with Ansible

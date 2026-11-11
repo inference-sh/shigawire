@@ -457,8 +457,25 @@ rules from the `### tuple ###` lines of `/etc/ufw/user.rules` and
 then each rule in order, then `ufw --force enable`, so the rules that let
 the operator in are there before the firewall is on. Then it reads the
 files again, and a rule ufw stored in another form than expected is an
-error, not a change on every run. Missing rules are appended in the order
-given; rules ufw has that the task does not list are left.
+error, not a change on every run.
+
+What happens to the rules ufw has:
+
+- The task adds and updates the rules it lists, and leaves every other
+  rule alone. A missing rule is appended, in the order given.
+- ufw tells rules apart by everything but their action and comment:
+  `allow 22/tcp` and `limit 22/tcp` are one rule, and adding one when the
+  other is there updates it in place. So a listed rule that ufw has with
+  another action or comment is drift that names both
+  (`allow in proto tcp from any to any port 22 (limit -> allow)`), in
+  plan and verify, and apply updates it. Two playbooks that list one port
+  with different actions undo each other: each reports the other's rule
+  as drift.
+- Two rules in one task that differ only in action or comment are
+  refused.
+- `state: absent` deletes the rule when ufw has it with the same action
+  (and comment, when the rule gives one), as `ufw delete` does; a rule
+  with another action is left.
 
 | key | type | |
 |---|---|---|
@@ -477,7 +494,7 @@ A rule:
 | `from`, `to` | address or network | default any |
 | `port` | string | destination port: `"22"`, `"6000:6007"`, `"80,443"`; a range or list needs `proto` |
 | `comment` | string | no quote or newline |
-| `state` | `present`, `absent` | absent deletes the rule when ufw has it |
+| `state` | `present`, `absent` | absent deletes the rule when ufw has it with this action |
 
 Ports are numbers: service and app names (`ssh`, `OpenSSH`) are refused,
 because ufw stores them in another form. A rule with an address is for

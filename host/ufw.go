@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -26,6 +27,14 @@ import (
 // enable last, so the rules that let the operator in are there before it.
 // After it ran, Check reads the files again, and what still differs (a
 // rule ufw stored in another form) is an error.
+//
+// A rule is the same rule to ufw whatever its action and comment: ufw
+// keeps one rule for "allow 22/tcp" and "limit 22/tcp", and adding one
+// when the other is there updates it in place. So a listed rule whose
+// existing counterpart has another action or comment is drift that names
+// both ("limit -> allow"), and Apply updates it. Rules UFW does not list
+// are left as they are; an Absent rule deletes only a rule with its
+// action (and its comment, when it has one), as ufw delete does.
 //
 // Rules are compared as ufw stores them, so a rule names ports by number
 // (not by service or app name), and addresses as ufw writes them: a
@@ -91,12 +100,58 @@ func (u *UFW) Validate() error {
 			return fmt.Errorf("ufw default %s %q: want allow, deny or reject", d, p)
 		}
 	}
+	keys := map[string]int{}
 	for i, r := range u.Rules {
-		if _, _, err := r.Tuples(true); err != nil {
+		v4, v6, err := r.Tuples(true)
+		if err != nil {
 			return fmt.Errorf("ufw rule %d: %w", i+1, err)
 		}
+		k := parseTuple(cmp.Or(v4, v6)).key
+		if j, ok := keys[k]; ok {
+			return fmt.Errorf("ufw rules %d and %d are one rule to ufw (they differ only in action or comment)", j+1, i+1)
+		}
+		keys[k] = i
 	}
 	return nil
+}
+
+// ufwTuple is a "### tuple ###" line in three: the action, what tells the
+// rule from others to ufw (all of it but the action and the comment), and
+// the comment ("" or comment=HEX).
+type ufwTuple struct{ action, key, comment string }
+
+func parseTuple(t string) ufwTuple {
+	f := strings.Fields(t)
+	if len(f) == 0 {
+		return ufwTuple{}
+	}
+	var c string
+	if last := f[len(f)-1]; strings.HasPrefix(last, "comment=") {
+		c, f = last, f[:len(f)-1]
+	}
+	return ufwTuple{action: f[0], key: strings.Join(f[1:], " "), comment: c}
+}
+
+// commentText is a tuple's comment as written: none, or quoted.
+func (t ufwTuple) commentText() string {
+	h, ok := strings.CutPrefix(t.comment, "comment=")
+	if !ok {
+		return "none"
+	}
+	if b, err := hex.DecodeString(h); err == nil {
+		return strconv.Quote(string(b))
+	}
+	return h
+}
+
+// ufwFind is the tuple in tuples that is want's rule to ufw, if any.
+func ufwFind(tuples []string, want ufwTuple) (ufwTuple, bool) {
+	for _, t := range tuples {
+		if got := parseTuple(t); got.key == want.key {
+			return got, true
+		}
+	}
+	return ufwTuple{}, false
 }
 
 // ufwAddr is an address or network as ufw writes it, and whether it is
@@ -243,6 +298,25 @@ func readTuples(path string) ([]string, error) {
 	return out, nil
 }
 
+// ufwDeletes reports whether ufw delete of the rule whose tuple is want
+// deletes one of tuples: one with its action and comment, or with its
+// action when want has no comment.
+func ufwDeletes(tuples []string, want string) bool {
+	if want == "" {
+		return false
+	}
+	w := parseTuple(want)
+	got, ok := ufwFind(tuples, w)
+	return ok && got.action == w.action && (w.comment == "" || got.comment == w.comment)
+}
+
+func appendNew(s []string, v string) []string {
+	if slices.Contains(s, v) {
+		return s
+	}
+	return append(s, v)
+}
+
 func ufwCmd(args ...string) Cmd {
 	return Cmd{Name: "ufw", Args: args, Timeout: time.Minute}
 }
@@ -289,14 +363,41 @@ func (u *UFW) todo() (*ufwTodo, error) {
 	}
 	for _, r := range u.Rules {
 		t4, t6, _ := r.Tuples(ipv6)
-		has := (t4 == "" || slices.Contains(v4, t4)) && (t6 == "" || slices.Contains(v6, t6))
-		some := (t4 != "" && slices.Contains(v4, t4)) || (t6 != "" && slices.Contains(v6, t6))
 		desc := strings.Join(r.args(), " ")
+		if r.Absent {
+			if ufwDeletes(v4, t4) || ufwDeletes(v6, t6) {
+				t.cmds = append(t.cmds, ufwCmd(append([]string{"delete"}, r.args()...)...))
+				t.drift = append(t.drift, "delete "+desc)
+			}
+			continue
+		}
+		missing, changes := false, []string{}
+		for _, f := range []struct {
+			has  []string
+			want string
+		}{{v4, t4}, {v6, t6}} {
+			if f.want == "" {
+				continue
+			}
+			want := parseTuple(f.want)
+			got, ok := ufwFind(f.has, want)
+			if !ok {
+				missing = true
+				continue
+			}
+			if got.action != want.action {
+				changes = appendNew(changes, got.action+" -> "+want.action)
+			}
+			if got.comment != want.comment {
+				changes = appendNew(changes, "comment "+got.commentText()+" -> "+want.commentText())
+			}
+		}
 		switch {
-		case r.Absent && some:
-			t.cmds = append(t.cmds, ufwCmd(append([]string{"delete"}, r.args()...)...))
-			t.drift = append(t.drift, "delete "+desc)
-		case !r.Absent && !has:
+		case len(changes) > 0:
+			// ufw updates the rule in place, and adds it where missing.
+			t.cmds = append(t.cmds, ufwCmd(r.args()...))
+			t.drift = append(t.drift, desc+" ("+strings.Join(changes, ", ")+")")
+		case missing:
 			t.cmds = append(t.cmds, ufwCmd(r.args()...))
 			t.drift = append(t.drift, desc)
 		}
