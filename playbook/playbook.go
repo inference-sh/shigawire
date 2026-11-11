@@ -135,6 +135,32 @@ func (r *registered) Apply(ctx context.Context, st host.State) (host.Result, err
 	return got, err
 }
 
+// need is a task another one needs, by the name it registers.
+type need struct {
+	name string
+	rec  *record
+}
+
+// needing is a task's resource that is not checked when a task it needs
+// failed in this run: in plan and verify it is unknown with that reason,
+// not a drift read from a host the failed task left as it was (a network
+// on a swarm that is locked); in apply it fails.
+type needing struct {
+	host.Resource
+	needs []need
+}
+
+func (n *needing) Unwrap() host.Resource { return n.Resource }
+
+func (n *needing) Check(ctx context.Context) (host.State, error) {
+	for _, d := range n.needs {
+		if d.rec.failed {
+			return host.State{}, fmt.Errorf("not checked: it needs %s, which failed", d.name)
+		}
+	}
+	return n.Resource.Check(ctx)
+}
+
 // recordExec is an Exec that keeps the last command's output in rec,
 // leaving out commands run aside (host.Aside: a guard, an owner lookup).
 type recordExec struct {

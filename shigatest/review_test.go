@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/inference-sh/shigawire/host"
+	"github.com/inference-sh/shigawire/host/hosttest"
 	"github.com/inference-sh/shigawire/host/hosttest/sim"
 	pb "github.com/inference-sh/shigawire/playbook"
 	"github.com/inference-sh/shigawire/shigatest"
@@ -128,5 +129,52 @@ steps:
 	}
 	if h.Exists("/etc/flag") || h.Exists("/etc/flag2") {
 		t.Fatal("a task ran on a guard's or a lookup's rc")
+	}
+}
+
+// A task that needs a task that failed is not checked: on a locked swarm
+// the plan does not report the network as one to create.
+func TestNeedsAFailedTask(t *testing.T) {
+	p := playbook(t, `
+name: t
+steps:
+  - name: swarm
+    tasks:
+      - name: swarm
+        docker_swarm: {}
+        register: swarm
+      - name: network
+        probe:
+          test: [docker, network, inspect, net]
+          drift: create
+          fix: [[docker, network, create, --driver, overlay, net]]
+        needs: swarm
+`)
+	run := func(state string, mode func(*pb.Playbook) func(context.Context, *host.Runner) error) []host.Result {
+		h := sim.New(t)
+		h.Swarm = state
+		loaded, err := shigatest.Load(h.Host, p, pb.Options{Registry: reg})
+		if err != nil {
+			t.Fatal(err)
+		}
+		rs, _ := shigatest.Results(context.Background(), mode(loaded))
+		return rs
+	}
+	plan := func(p *pb.Playbook) func(context.Context, *host.Runner) error { return p.Plan }
+	verify := func(p *pb.Playbook) func(context.Context, *host.Runner) error { return p.Verify }
+	apply := func(p *pb.Playbook) func(context.Context, *host.Runner) error { return p.Apply }
+	for _, mode := range []func(*pb.Playbook) func(context.Context, *host.Runner) error{plan, verify} {
+		rs := run("locked", mode)
+		if len(rs) != 2 || rs[0].Status != host.Unknown || rs[1].Status != host.Unknown || rs[1].Msg != "not checked: it needs swarm, which failed" {
+			t.Fatalf("locked: %s %q", hosttest.Statuses(rs), rs[len(rs)-1].Msg)
+		}
+	}
+	// Inactive: the plan inits the swarm and creates the network.
+	rs := run("inactive", plan)
+	if rs[0].Msg != "swarm inactive: init" || rs[1].Status != host.Changed || rs[1].Msg != "create" {
+		t.Fatalf("inactive: %s %q %q", hosttest.Statuses(rs), rs[0].Msg, rs[1].Msg)
+	}
+	if rs := run("inactive", apply); hosttest.Statuses(rs) != "swarm: swarm=changed swarm: network=changed" {
+		t.Fatal(hosttest.Statuses(rs))
 	}
 }
