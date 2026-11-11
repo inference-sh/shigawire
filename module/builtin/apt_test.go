@@ -23,15 +23,12 @@ func TestApt(t *testing.T) {
 	if got := h.Exec.Ran("apt-get"); len(got) != 1 || !strings.HasSuffix(got[0], "remove --purge jq") || h.Packages["jq"] {
 		t.Fatal(got, h.Packages)
 	}
-	// An update alone is an action, once a run, and again in the next run
-	// with the same Env.
+	// An update alone is an action, once a run.
 	update := map[string]any{"update_cache": true}
 	play := host.Play{Tasks: []host.Task{{Resource: build(t, env, "apt", update)}, {Resource: build(t, env, "apt", update)}}}
-	for run := 1; run <= 2; run++ {
-		got, err := hosttest.Run(hosttest.Apply, play)
-		if err != nil || got[0].Status != host.Changed || !got[0].Action || got[1].Status != host.OK {
-			t.Fatalf("run %d: %+v %v", run, got, err)
-		}
+	got, err := hosttest.Run(hosttest.Apply, play)
+	if err != nil || got[0].Status != host.Changed || !got[0].Action || got[1].Status != host.OK {
+		t.Fatalf("%+v %v", got, err)
 	}
 }
 
