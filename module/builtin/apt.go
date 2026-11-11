@@ -1,7 +1,6 @@
 package builtin
 
 import (
-	"context"
 	"errors"
 	"regexp"
 	"strings"
@@ -56,21 +55,7 @@ func newApt(env module.Env, a aptArgs) (host.Resource, error) {
 	case len(a.Name) == 0:
 		return update, nil
 	case state == "present" && a.UpdateCache:
-		names := []string(a.Name)
-		// The update runs only when something is to be installed: a host
-		// that has the packages needs no new lists.
-		missing := func(ctx context.Context) (bool, error) {
-			for _, n := range names {
-				if ok, err := env.Apt.Installed(ctx, n); err != nil || !ok {
-					return err == nil, err
-				}
-			}
-			return false, nil
-		}
-		return &host.All{What: "apt install", Parts: []host.Resource{
-			&host.When{Cond: missing, Resource: update},
-			env.Apt.Install(names...),
-		}}, nil
+		return env.Apt.InstallUpdating(a.CacheValidTime, a.Name...), nil
 	case state == "present":
 		return env.Apt.Install(a.Name...), nil
 	case a.UpdateCache:

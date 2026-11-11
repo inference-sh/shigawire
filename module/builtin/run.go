@@ -74,6 +74,7 @@ type commandArgs struct {
 	Watch []string `yaml:"watch"`
 	// ChangesPackages: the command installs or removes packages (an
 	// installer that runs apt-get): apt reads what is installed again.
+	// It does anyway when dpkg's status file changed.
 	ChangesPackages bool `yaml:"changes_packages"`
 }
 

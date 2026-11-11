@@ -162,3 +162,17 @@ func TestUFWActionIsPartOfTheRule(t *testing.T) {
 		t.Fatal(h.Read("/etc/ufw/user6.rules"))
 	}
 }
+
+// An installer that runs apt-get itself changes dpkg's status file, so an
+// Apt that read the packages before reads them again.
+func TestDpkgStatus(t *testing.T) {
+	h := sim.New(t)
+	apt := &host.Apt{Exec: h.Exec, Root: h.Root}
+	if ok, _ := apt.Installed(t.Context(), "jq"); ok {
+		t.Fatal("jq installed")
+	}
+	hosttest.ApplyOne(t, &host.Command{Exec: h.Exec, Cmd: host.Cmd{Name: "apt-get", Args: []string{"install", "-y", "jq"}}})
+	if ok, _ := apt.Installed(t.Context(), "jq"); !ok || !strings.Contains(h.Read("/var/lib/dpkg/status"), "Package: jq\n") {
+		t.Fatal("the read of the packages is stale")
+	}
+}

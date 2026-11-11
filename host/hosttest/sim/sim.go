@@ -257,14 +257,28 @@ func (h *Host) aptGet(a []string) host.Output {
 				}
 			}
 		}
+		h.writeDpkgStatus()
 		return ok("")
 	case "remove", "purge":
 		for _, p := range words[1:] {
 			delete(h.Packages, p)
 		}
+		h.writeDpkgStatus()
 		return ok("")
 	}
 	return fail(100, "E: Invalid operation "+words[0])
+}
+
+// writeDpkgStatus writes dpkg's status file as apt-get leaves it: one
+// that changed tells host.Apt to read the packages again.
+func (h *Host) writeDpkgStatus() {
+	var b strings.Builder
+	for _, p := range slices.Sorted(maps.Keys(h.Packages)) {
+		if h.Packages[p] {
+			fmt.Fprintf(&b, "Package: %s\nStatus: install ok installed\n\n", p)
+		}
+	}
+	h.Write("/var/lib/dpkg/status", b.String())
 }
 
 // systemctl VERB [--now|--quiet] [-p PROP]... UNIT
