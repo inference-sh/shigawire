@@ -189,15 +189,12 @@ func newSwarm(env module.Env, a swarmArgs) (host.Resource, error) {
 	if err != nil {
 		return nil, err
 	}
-	join := state == "join"
-	switch {
-	case join && (a.JoinToken == "" || len(a.RemoteAddrs) == 0):
-		return nil, errors.New("state join needs join_token and remote_addrs")
-	case !join && (a.JoinToken != "" || len(a.RemoteAddrs) > 0):
-		return nil, errors.New("join_token and remote_addrs are for state join")
+	sw := &host.Swarm{Exec: env.Exec, Join: state == "join", AdvertiseAddr: a.AdvertiseAddr, ListenAddr: a.ListenAddr,
+		RemoteAddrs: a.RemoteAddrs, JoinToken: a.JoinToken}
+	if err := sw.Validate(); err != nil {
+		return nil, err
 	}
-	return &host.Swarm{Exec: env.Exec, Join: join, AdvertiseAddr: a.AdvertiseAddr, ListenAddr: a.ListenAddr,
-		RemoteAddrs: a.RemoteAddrs, JoinToken: a.JoinToken}, nil
+	return sw, nil
 }
 
 type assertArgs struct {

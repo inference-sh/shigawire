@@ -168,8 +168,8 @@ func TestSwarm(t *testing.T) {
 	if err == nil || strings.Contains(err.Error(), "secret") || !strings.Contains(err.Error(), "timeout") {
 		t.Fatal(hosttest.Statuses(got), err)
 	}
-	refuse(t, env, "docker_swarm", map[string]any{"state": "join"}, "join_token and remote_addrs")
-	refuse(t, env, "docker_swarm", map[string]any{"join_token": "x"}, "for state join")
+	refuse(t, env, "docker_swarm", map[string]any{"state": "join"}, "needs a join token and a manager's address")
+	refuse(t, env, "docker_swarm", map[string]any{"join_token": "x"}, "are for docker swarm join")
 	refuse(t, env, "docker_swarm", map[string]any{"state": "leave"}, "want init, join")
 }
 

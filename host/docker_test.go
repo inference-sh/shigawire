@@ -32,3 +32,15 @@ func TestComposeDrift(t *testing.T) {
 		t.Fatalf("%q %v", st.Drift, err)
 	}
 }
+
+// Check refuses a join without a token or managers, and an init with
+// either, before it runs anything.
+func TestSwarm_Validate(t *testing.T) {
+	for _, s := range []*Swarm{{Join: true, JoinToken: "x"}, {Join: true, RemoteAddrs: []string{"10.0.0.1:2377"}}, {JoinToken: "x"}} {
+		ex := &fakeExec{}
+		s.Exec = ex
+		if _, err := s.Check(context.Background()); err == nil || len(ex.calls) != 0 {
+			t.Errorf("%+v: %v, ran %v", s, err, ex.calls)
+		}
+	}
+}
