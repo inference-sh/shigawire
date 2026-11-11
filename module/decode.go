@@ -59,14 +59,13 @@ func keyPath(p, k string) string {
 func fields(v reflect.Value, into map[string]reflect.Value) {
 	t := v.Type()
 	for i := range t.NumField() {
-		f := t.Field(i)
-		tag, _, _ := strings.Cut(f.Tag.Get("yaml"), ",")
-		if tag == "-" {
+		tag, embed, ok := fieldKey(t.Field(i))
+		switch {
+		case !ok:
 			continue
-		}
-		if f.Anonymous && tag == "" {
+		case embed:
 			fv := v.Field(i)
-			if fv.Kind() == reflect.Pointer && fv.Type().Elem().Kind() == reflect.Struct {
+			if fv.Kind() == reflect.Pointer {
 				if fv.IsNil() {
 					if !fv.CanSet() {
 						continue
@@ -75,16 +74,8 @@ func fields(v reflect.Value, into map[string]reflect.Value) {
 				}
 				fv = fv.Elem()
 			}
-			if fv.Kind() == reflect.Struct {
-				fields(fv, into)
-				continue
-			}
-		}
-		if !f.IsExported() {
+			fields(fv, into)
 			continue
-		}
-		if tag == "" {
-			tag = strings.ToLower(f.Name)
 		}
 		into[tag] = v.Field(i)
 	}

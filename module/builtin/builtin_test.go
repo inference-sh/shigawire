@@ -18,7 +18,7 @@ var builtins = builtin.Registry()
 // newHost is a fake host and the Env its modules act through.
 func newHost(t *testing.T) (*hosttest.Host, module.Env) {
 	h := hosttest.New(t)
-	return h, module.Env{Exec: h.Exec, Root: h.Root, Apt: &host.Apt{Exec: h.Exec, Root: h.Root}}
+	return h, module.NewEnv(h.Exec, h.Root)
 }
 
 // build is the resource the module name makes from args.
