@@ -19,7 +19,6 @@ import (
 	"regexp"
 	"runtime"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -164,12 +163,9 @@ func newHost(t *testing.T) *box {
 	if err != nil {
 		t.Fatal(err)
 	}
-	uid, err1 := strconv.Atoi(u.Uid)
-	gid, err2 := strconv.Atoi(u.Gid)
-	if err := errors.Join(err1, err2); err != nil {
+	if h.user, err = host.UserOwner(u); err != nil {
 		t.Fatal(err)
 	}
-	h.user = host.Owner{UID: uid, GID: gid}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/payload", func(w http.ResponseWriter, _ *http.Request) { w.Write(h.payload) })
 	mux.HandleFunc("/key.gpg", func(w http.ResponseWriter, _ *http.Request) {
