@@ -438,6 +438,18 @@ func TestApt_Installed(t *testing.T) {
 	}
 }
 
+func TestApt_LenientUpdate(t *testing.T) {
+	ex := &fakeExec{}
+	a := &Apt{Exec: ex, Root: t.TempDir(), LenientUpdate: true}
+	apply(t, a.Update(0))
+	if got := ex.ran("apt-get"); len(got) != 1 || strings.Contains(got[0], "Error-Mode") {
+		t.Fatal(got)
+	}
+	if st, _ := a.Update(0).Check(context.Background()); !st.Action {
+		t.Fatal("update is not an action")
+	}
+}
+
 func TestApt_RepoKeyringDir(t *testing.T) {
 	root := t.TempDir()
 	a := &Apt{Exec: &fakeExec{}, Root: root}
