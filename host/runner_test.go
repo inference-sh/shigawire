@@ -225,3 +225,36 @@ func TestAll(t *testing.T) {
 		t.Errorf("d/f: %q %v", b, err)
 	}
 }
+
+// progress is a resource whose Check says how far it is.
+type progress struct{ stub }
+
+func (p *progress) Check(ctx context.Context) (State, error) {
+	Progress(ctx, "%d files", 3)
+	return p.stub.Check(ctx)
+}
+
+// OnStart gets each task's and handler's name before its result lands;
+// OnProgress gets what a resource says through Progress.
+func TestRunner_OnStartAndOnProgress(t *testing.T) {
+	var log, events []string
+	h := &Handler{Name: "h", Resource: &stub{id: "h", log: &log}}
+	r := Runner{
+		OnStart:    func(name string) { events = append(events, "start "+name) },
+		OnProgress: func(d string) { events = append(events, "progress "+d) },
+		OnResult:   func(res Result) { events = append(events, "result "+res.Name) },
+	}
+	p := Play{Tasks: []Task{
+		{Name: "a", Resource: &progress{stub{id: "a", log: &log}}, Notify: []*Handler{h}},
+		{Name: "b", Resource: &stub{id: "b", inPlace: true, log: &log}},
+	}, Handlers: []*Handler{h}}
+	if err := r.Run(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"start a", "progress 3 files", "result a", "start b", "result b", "start h", "result h"}
+	if !slices.Equal(events, want) {
+		t.Fatalf("events %q, want %q", events, want)
+	}
+	// Without a listener Progress does nothing.
+	Progress(context.Background(), "x")
+}
