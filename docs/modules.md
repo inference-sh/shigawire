@@ -541,8 +541,9 @@ prints a level and what it found (`2 ufw inactive`), asserted with
 and fails on 2 with `2, above 1: ufw inactive`.
 
 In a run it reports ok, warn or failed (a failure stops the play like any
-other task). In Plan and Verify a failure is reported unknown and a
-warning warn; Verify fails on unknown.
+other task). In Verify a failure is reported failed (Verify reads on and
+exits 1), and in Plan unknown, since a change planned before it may make
+it pass; a warning is warn in both.
 
 | key | type | |
 |---|---|---|
@@ -598,8 +599,8 @@ when the task is checked: it is in place when it exits 0 and, with
 `regex`, its output (surrounding whitespace removed) matches. When it is
 not, `fix` runs, in order, and then `test` again: still failing is an
 error, so a fix that does not work does not report `changed` on every
-run. With no `fix`, a failing test fails the task (in `plan` and
-`verify`: `unknown`).
+run. With no `fix`, a failing test fails the task (in `verify` too; in
+`plan`: `unknown`).
 
 | key | type | |
 |---|---|---|
@@ -621,8 +622,8 @@ run. With no `fix`, a failing test fails the task (in `plan` and
 
 ## fail
 
-A task that always fails with `msg`, so the play stops there (in `plan`
-and `verify`: `unknown`). With `when`, a refusal: a variable a later task
+A task that always fails with `msg`, so the play stops there (in
+`verify` too; in `plan`: `unknown`, and `plan` exits 1). With `when`, a refusal: a variable a later task
 needs is empty, the host is not one the playbook is for.
 
 | key | type | |

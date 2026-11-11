@@ -152,6 +152,14 @@ func TestFailures(t *testing.T) {
 			t.Fatal(args, code, x.stdout)
 		}
 	}
+	// An assert that ran and found the host wrong is a failure in verify,
+	// not an unknown, and verify reads on to the drift after it: exit 1.
+	x.h.Exec.On("check tailscale", hosttest.Out("2\n"))
+	asserted := hosttest.Playbook(t, "steps:\n  - name: s\n    tasks:\n      - assert: {name: tailscale running, cmd: [check, tailscale], max: 1}\n      - file: {path: /x, content: y, parents: true}\n")
+	if code := x.run("verify", asserted); code != exitFailed || !strings.HasPrefix(x.stdout.String(), "failed   s: tailscale running: 2, above 1\n") ||
+		!strings.HasSuffix(x.stdout.String(), "verify: 1 changed, 1 failed\n") {
+		t.Fatalf("%d %q", code, x.stdout)
+	}
 	for _, args := range [][]string{
 		{},
 		{"nope"},

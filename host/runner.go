@@ -76,7 +76,9 @@ const (
 	// Changed: Apply changed something. In Plan, Apply would; in Verify,
 	// the resource is not in place (drift).
 	Changed
-	// Failed: Check or Apply failed. Only Run reports it.
+	// Failed: Check or Apply failed. In Verify, only a Check that found
+	// the host wrong (IsFinding), and Verify reads on; Plan never reports
+	// it.
 	Failed
 	// Ignored: failed, and the play went on (Task.IgnoreErrors).
 	Ignored
@@ -84,7 +86,7 @@ const (
 	Warn
 	// Unknown: in Plan or Verify, Check failed, so whether the resource
 	// is in place is not known (it may read what an earlier task would put
-	// there).
+	// there). In Verify, not a Finding: that is Failed.
 	Unknown
 	// Skipped: the task does not apply here (State.Skipped); nothing was
 	// done.
@@ -141,9 +143,10 @@ func (r *refusal) Unwrap() error { return r.err }
 
 // Refusal marks err as a refusal: a Check that fails whatever the tasks
 // before it change (a playbook's fail task), so the play stops there. Plan
-// reports it Unknown like any failed Check; a caller can tell it from a
-// Check that failed because an earlier task has not run (an owner a user
-// task would create). Refusal of nil is nil.
+// reports it Unknown like any failed Check, and Blocked; a caller can tell
+// it from a Check that failed because an earlier task has not run (an
+// owner a user task would create). It is a Finding too: Verify reports it
+// Failed. Refusal of nil is nil.
 func Refusal(err error) error {
 	if err == nil {
 		return nil
@@ -155,6 +158,33 @@ func Refusal(err error) error {
 func IsRefusal(err error) bool {
 	var r *refusal
 	return errors.As(err, &r)
+}
+
+// finding is an error Finding marked.
+type finding struct{ err error }
+
+func (f *finding) Error() string { return f.err.Error() }
+func (f *finding) Unwrap() error { return f.err }
+
+// Finding marks err as what a Check found: it read the host, and the host
+// is wrong (an Assert's condition that does not hold). A Check's other
+// errors are that it could not read what it reads (a file's owner that
+// no user is yet). Verify reports a Finding, and a Refusal, Failed, and
+// any other failed Check Unknown. Run fails it like any error; Plan
+// reports it Unknown, since a change planned before it may make it hold.
+// Finding of nil is nil.
+func Finding(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &finding{err}
+}
+
+// IsFinding reports whether err is, or wraps, one Finding or Refusal
+// marked: a Check that ran and found the host wrong.
+func IsFinding(err error) bool {
+	var f *finding
+	return errors.As(err, &f) || IsRefusal(err)
 }
 
 // Result is one task's outcome, for the report.
@@ -250,9 +280,10 @@ func (r *Runner) Plan(ctx context.Context, p Play) error { return r.run(ctx, p, 
 
 // Verify runs every task's Check and no Apply, and runs no handler: it
 // reports drift. A task not in place is reported Changed with its drift;
-// an action is reported OK (Result.Action) and not run; a Check that fails
-// is Unknown. Verify reads every task, and returns an error when any was
-// Changed or Unknown.
+// an action is reported OK (Result.Action) and not run; a Check that found
+// the host wrong (IsFinding: an assert that does not hold) is Failed, and
+// any other Check that fails is Unknown. Verify reads every task, and
+// returns an error when any was Changed, Failed or Unknown.
 func (r *Runner) Verify(ctx context.Context, p Play) error { return r.run(ctx, p, modeVerify) }
 
 func (p Play) validate() error {
@@ -311,8 +342,9 @@ type playRun struct {
 	// order first notified; failed are those that failed in the run.
 	notified []*Handler
 	failed   map[*Handler]bool
-	// drifted and unknown count Verify's Changed and Unknown.
-	drifted, unknown int
+	// drifted, failures and unknown count Verify's Changed, Failed and
+	// Unknown.
+	drifted, failures, unknown int
 	// changed: a task or handler reported Changed so far.
 	changed bool
 }
@@ -342,6 +374,9 @@ func (r *Runner) run(ctx context.Context, p Play, m mode) error {
 		}
 		switch pr.report(res, t.IgnoreErrors).Status {
 		case Failed:
+			if m == modeVerify {
+				continue
+			}
 			return errors.Join(fmt.Errorf("%s: %w", res.Name, res.Err), pr.flush(ctx))
 		case Changed:
 			if m == modeVerify {
@@ -355,8 +390,8 @@ func (r *Runner) run(ctx context.Context, p Play, m mode) error {
 		}
 	}
 	err := pr.flush(ctx)
-	if m == modeVerify && (pr.drifted > 0 || pr.unknown > 0) {
-		err = errors.Join(err, fmt.Errorf("%d not in place, %d unknown", pr.drifted, pr.unknown))
+	if m == modeVerify && (pr.drifted > 0 || pr.failures > 0 || pr.unknown > 0) {
+		err = errors.Join(err, fmt.Errorf("%d not in place, %d failed, %d unknown", pr.drifted, pr.failures, pr.unknown))
 	}
 	return err
 }
@@ -374,6 +409,8 @@ func (pr *playRun) report(res Result, ignoreErrors bool) Result {
 		switch res.Status {
 		case Changed:
 			pr.drifted++
+		case Failed:
+			pr.failures++
 		case Unknown:
 			pr.unknown++
 		}
@@ -436,6 +473,8 @@ func (pr *playRun) one(ctx context.Context, name string, rc Resource) Result {
 		switch {
 		case IsWarning(err):
 			res.Status = Warn
+		case pr.mode == modeVerify && IsFinding(err):
+			res.Status = Failed
 		case pr.mode != modeApply:
 			res.Status = Unknown
 		default:
