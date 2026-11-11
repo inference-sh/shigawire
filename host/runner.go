@@ -283,6 +283,25 @@ func (p Play) validate() error {
 	return nil
 }
 
+// runMark marks one run of a play in its context, for what a resource keeps
+// for the rest of the run only (Apt's update). It is not empty, so each
+// new(runMark) is a distinct pointer.
+type runMark struct{ _ byte }
+
+type runKey struct{}
+
+// outsideRuns is the run of a context that is in none: a resource checked
+// or applied without a Runner.
+var outsideRuns = new(runMark)
+
+// runOf is the run ctx is in.
+func runOf(ctx context.Context) *runMark {
+	if r, ok := ctx.Value(runKey{}).(*runMark); ok {
+		return r
+	}
+	return outsideRuns
+}
+
 // playRun is one run of a play.
 type playRun struct {
 	r    *Runner
@@ -302,6 +321,7 @@ func (r *Runner) run(ctx context.Context, p Play, m mode) error {
 	if err := p.validate(); err != nil {
 		return err
 	}
+	ctx = context.WithValue(ctx, runKey{}, new(runMark))
 	if m == modeApply {
 		ctx = withSaves(ctx, p)
 	}

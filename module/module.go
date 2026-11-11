@@ -34,7 +34,7 @@ import (
 type Env struct {
 	// Exec runs the commands.
 	Exec host.Exec
-	// Apt is the run's one Apt (host.Apt is meant to be one per run).
+	// Apt is the one Apt the modules share, across the runs of a playbook.
 	Apt *host.Apt
 	// Root is the directory the host's paths are under: "" or "/" is the
 	// host itself, a test sets a temporary directory. A module puts every
