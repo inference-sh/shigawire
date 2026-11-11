@@ -272,7 +272,9 @@ shiga version
 - `apply` checks each task and changes those not in place. It stops at
   the first failure; the handlers notified before it still run.
 - `verify` checks every task, runs no handler and no action (a command
-  with no guard), and reports drift.
+  with no guard), and reports drift. A check that ran and found the host
+  wrong (an `assert`, `probe` with no `fix` or `fail` task that does not
+  pass, a locked swarm) is `failed`, and verify goes on to the next task.
 - `check` validates the playbook and touches no host ([Checking a
   playbook](#checking-a-playbook)).
 - `test` runs the playbook on a simulated host ([Testing a
@@ -296,10 +298,10 @@ apply: 1 ok, 2 changed, 1 skipped
 |--------|---------|
 | `ok` | In place; nothing done. |
 | `changed` | Changed (apply), would change (plan), or drifted (verify). |
-| `failed` | The check or apply failed. |
+| `failed` | The check or apply failed. In `verify`, a check that ran and found the host wrong (an `assert` that does not hold). |
 | `ignored` | Failed, with `ignore_errors: true`; the play went on. |
 | `warn` | The module reported a warning; the play went on. |
-| `unknown` | In plan or verify, the check failed, so whether it is in place is not known. |
+| `unknown` | In plan or verify, the check failed, so whether it is in place is not known: it could not read what it reads (a file's owner with no such user yet, ufw not installed). In plan, also an `assert` that does not hold, which a change planned before it may make pass. |
 | `skipped` | Its `when` was false. |
 
 `--quiet` leaves out the `ok` and `skipped` lines.
@@ -309,7 +311,7 @@ Exit codes:
 | code | meaning |
 |------|---------|
 | 0 | Success. `verify`: no drift. |
-| 1 | A failure: a load error, a failed task or handler, in `verify` an `unknown`, or in `plan` an `unknown` no earlier change can explain (below). |
+| 1 | A failure: a load error, a failed task or handler, in `verify` a `failed` or `unknown`, or in `plan` an `unknown` no earlier change can explain (below). |
 | 2 | `verify`: drift. `plan` and `apply` with `--detailed-exitcode`: something changed or would change. |
 
 An `unknown` in a plan is a check that failed. `plan` exits 0 when it
@@ -402,7 +404,7 @@ sysctl values, ufw's files and the docker swarm state are modelled (any
 package name installs); every other command succeeds with no output. A
 task that reads a command's output (an `assert`, a `probe`, a `query`)
 sees an empty one, so a health check that wants `200` from `curl` is
-`unknown` in `verify`. The host's files are a temporary directory,
+`failed` in `verify`. The host's files are a temporary directory,
 removed when the test ends. `shiga test` uses package `simrun`, as
 `shigatest` does.
 

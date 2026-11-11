@@ -102,12 +102,12 @@ There are no templates and no loops, on purpose. A full example is in [examples/
 |---|---|
 | `shiga plan PLAYBOOK` | what `apply` would change; changes nothing |
 | `shiga apply PLAYBOOK` | put the host in the playbook's state |
-| `shiga verify PLAYBOOK` | report drift; runs no actions; exit 2 on drift |
+| `shiga verify PLAYBOOK` | report drift; runs no actions; exit 2 on drift, 1 on a failed check (an `assert` that does not hold) |
 | `shiga check PLAYBOOK` | validate modules, arguments, variables, `when`, `notify` and files; reads nothing of the host |
 | `shiga test PLAYBOOK` | apply, apply again, verify, on a simulated Debian host |
 | `shiga modules` | every module and its arguments |
 
-Exit codes: 0 ok, 1 failure (in `plan`: an unknown no earlier change can explain), 2 drift (`verify`) or changes (`--detailed-exitcode`).
+Exit codes: 0 ok, 1 failure (in `verify`: a failed or unknown check; in `plan`: an unknown no earlier change can explain), 2 drift (`verify`) or changes (`--detailed-exitcode`).
 
 ## Modules
 

@@ -101,7 +101,7 @@ func TestRunner_Verify(t *testing.T) {
 		{Resource: &stub{id: "ok", inPlace: true, log: &log}},
 	}}
 	got, err := runMode((*Runner).Verify, p)
-	if err == nil || !strings.Contains(err.Error(), "1 not in place, 1 unknown") {
+	if err == nil || !strings.Contains(err.Error(), "1 not in place, 0 failed, 1 unknown") {
 		t.Fatalf("err %v", err)
 	}
 	if len(log) != 0 || len(ex.calls) != 0 {
@@ -116,6 +116,46 @@ func TestRunner_Verify(t *testing.T) {
 	got, err = runMode((*Runner).Verify, Play{Tasks: []Task{{Resource: &stub{id: "ok", inPlace: true}}}})
 	if err != nil || len(got) != 1 {
 		t.Fatal(err, got)
+	}
+}
+
+// A Check that read the host and found it wrong (a Finding: an Assert that
+// does not hold, a Probe with no fix that fails; a Refusal) is Failed in
+// Verify, and Verify reads on. One that could not read is Unknown. Plan
+// reports a Finding Unknown, Blocked by the rules of any other.
+func TestRunner_VerifyFinding(t *testing.T) {
+	ex := &fakeExec{respond: func(string) Output { return Output{Code: 1, Err: errors.New("exit 1")} }}
+	no := func(context.Context) error { return errors.New("2, above 1") }
+	p := Play{Tasks: []Task{
+		{Name: "assert", Resource: &Assert{Name: "assert", Holds: no}},
+		{Name: "probe", Resource: &Probe{Exec: ex, Test: Cmd{Name: "check"}}},
+		{Name: "refusal", Resource: &checkFails{Refusal(errors.New("DOMAIN is empty"))}},
+		{Name: "finding", Resource: &checkFails{Finding(errors.New("wrong"))}},
+		{Name: "ignored", Resource: &Assert{Name: "ignored", Holds: no}, IgnoreErrors: true},
+		{Name: "missing", Resource: &checkFails{errors.New("no user deploy")}},
+		{Name: "drifted", Resource: &stub{id: "drifted"}},
+	}}
+	got, err := runMode((*Runner).Verify, p)
+	want := "assert=failed probe=failed refusal=failed finding=failed ignored=ignored missing=unknown drifted=changed"
+	if s := statuses(got); s != want {
+		t.Fatalf("got  %s\nwant %s", s, want)
+	}
+	if err == nil || !strings.Contains(err.Error(), "1 not in place, 4 failed, 1 unknown") {
+		t.Fatalf("err %v", err)
+	}
+	if got[0].Msg != "2, above 1" {
+		t.Fatalf("msg %q", got[0].Msg)
+	}
+	got, err = runMode((*Runner).Plan, Play{Tasks: []Task{
+		{Name: "before", Resource: &Assert{Name: "before", Holds: no}},
+		{Name: "change", Resource: &stub{id: "change"}},
+		{Name: "after", Resource: &Assert{Name: "after", Holds: no}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := statuses(got); s != "before=unknown change=changed after=unknown" || !got[0].Blocked || got[2].Blocked {
+		t.Fatalf("plan %s, blocked %v %v", s, got[0].Blocked, got[2].Blocked)
 	}
 }
 

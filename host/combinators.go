@@ -43,7 +43,8 @@ func (l *Lazy) Apply(ctx context.Context, st State) (Result, error) {
 }
 
 // Assert is a condition the play stops at when it does not hold (a disk
-// that is no longer blank). It changes nothing.
+// that is no longer blank). It changes nothing. A condition that does not
+// hold is a Finding: Verify reports it Failed.
 type Assert struct {
 	Name string
 	// Holds is nil when the condition holds, else why not.
@@ -60,7 +61,7 @@ func (a *Assert) Check(ctx context.Context) (State, error) {
 		if a.Warn {
 			return State{}, Warning(err)
 		}
-		return State{}, err
+		return State{}, Finding(err)
 	}
 	return inPlace()
 }
@@ -71,7 +72,8 @@ func (a *Assert) Apply(context.Context, State) (Result, error) { return unchange
 // Probe is state a command reads: in place when Test's output passes OK
 // (nil OK: when Test exits 0). Apply runs Fix, in order, then runs Test
 // again: still not in place is an error. With no Fix it is a check the
-// play stops at, as Assert is: Check fails when it does not pass.
+// play stops at, as Assert is: Check fails with a Finding when it does
+// not pass.
 type Probe struct {
 	// Name is its ID; "" is "probe" and the command.
 	Name string
@@ -101,7 +103,7 @@ func (p *Probe) Check(ctx context.Context) (State, error) {
 	case p.passes(ctx):
 		return inPlace()
 	case len(p.Fix) == 0:
-		return State{}, errors.New(p.drift())
+		return State{}, Finding(errors.New(p.drift()))
 	}
 	return drift("%s", p.drift())
 }

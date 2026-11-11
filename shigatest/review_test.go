@@ -163,9 +163,13 @@ steps:
 	plan := func(p *pb.Playbook) func(context.Context, *host.Runner) error { return p.Plan }
 	verify := func(p *pb.Playbook) func(context.Context, *host.Runner) error { return p.Verify }
 	apply := func(p *pb.Playbook) func(context.Context, *host.Runner) error { return p.Apply }
-	for _, mode := range []func(*pb.Playbook) func(context.Context, *host.Runner) error{plan, verify} {
-		rs := run("locked", mode)
-		if len(rs) != 2 || rs[0].Status != host.Unknown || rs[1].Status != host.Unknown || rs[1].Msg != "not checked: it needs swarm, which failed" {
+	// A locked swarm is a refusal: unknown in plan, failed in verify.
+	for _, c := range []struct {
+		mode func(*pb.Playbook) func(context.Context, *host.Runner) error
+		want host.Status
+	}{{plan, host.Unknown}, {verify, host.Failed}} {
+		rs := run("locked", c.mode)
+		if len(rs) != 2 || rs[0].Status != c.want || rs[1].Status != host.Unknown || rs[1].Msg != "not checked: it needs swarm, which failed" {
 			t.Fatalf("locked: %s %q", hosttest.Statuses(rs), rs[len(rs)-1].Msg)
 		}
 	}
