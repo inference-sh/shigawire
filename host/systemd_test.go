@@ -1,57 +1,49 @@
-package host
+package host_test
 
 import (
 	"context"
 	"slices"
 	"testing"
+
+	"github.com/inference-sh/shigawire/host"
+	"github.com/inference-sh/shigawire/host/hosttest"
+	"github.com/inference-sh/shigawire/host/hosttest/sim"
 )
 
 func TestService(t *testing.T) {
-	enabled, active := false, false
-	ex := &fakeExec{respond: func(line string) Output {
-		switch line {
-		case "systemctl show -p UnitFileState -p ActiveState docker":
-			return Output{Out: "UnitFileState=" + map[bool]string{true: "enabled", false: "disabled"}[enabled] +
-				"\nActiveState=" + map[bool]string{true: "active", false: "inactive"}[active] + "\n"}
-		case "systemctl enable --now docker":
-			enabled, active = true, true
-		case "systemctl enable docker":
-			enabled = true
-		case "systemctl start docker":
-			active = true
-		}
-		return Output{}
-	}}
-	s := &Service{Exec: ex, Name: "docker", Enabled: true, Running: true}
-	if r := converge(t, s, Changed); r.Msg != "enable and start" || len(ex.ran("systemctl enable --now")) != 1 {
-		t.Fatalf("msg %q, ran %v", r.Msg, ex.calls)
+	h := sim.New(t)
+	s := &host.Service{Exec: h.Exec, Name: "docker", Enabled: true, Running: true}
+	if r := hosttest.Converge(t, s, host.Changed); r.Msg != "enable and start" || len(h.Exec.Ran("systemctl enable --now")) != 1 {
+		t.Fatalf("msg %q, ran %v", r.Msg, h.Exec.Calls())
 	}
 	// Running only: an enabled unit that stopped is started, nothing else.
-	active = false
-	ex.calls = nil
-	converge(t, &Service{Exec: ex, Name: "docker", Running: true}, Changed)
-	if len(ex.ran("systemctl enable")) != 0 || len(ex.ran("systemctl start")) != 1 {
-		t.Fatalf("ran %v", ex.calls)
+	h.Units["docker"].Active = false
+	h.Exec.Reset()
+	hosttest.Converge(t, &host.Service{Exec: h.Exec, Name: "docker", Running: true}, host.Changed)
+	if len(h.Exec.Ran("systemctl enable")) != 0 || len(h.Exec.Ran("systemctl start")) != 1 {
+		t.Fatalf("ran %v", h.Exec.Calls())
 	}
 	// A static unit cannot be enabled, and need not be.
-	enabled = false
-	st, err := (&Service{Exec: &fakeExec{respond: func(string) Output {
-		return Output{Out: "UnitFileState=static\nActiveState=active\n"}
-	}}, Name: "x", Enabled: true, Running: true}).Check(context.Background())
+	h.Exec.On("systemctl show", hosttest.Out("UnitFileState=static\nActiveState=active\n"))
+	st, err := (&host.Service{Exec: h.Exec, Name: "x", Enabled: true, Running: true}).Check(context.Background())
 	if err != nil || !st.InPlace {
 		t.Fatalf("a static unit: %+v %v", st, err)
 	}
 }
 
 func TestRestartAndDaemonReload(t *testing.T) {
-	ex := &fakeExec{}
-	apply(t, &Restart{Exec: ex, Name: "infsh-boxd"})
-	apply(t, &DaemonReload{Exec: ex})
-	if want := []string{"systemctl restart infsh-boxd", "systemctl daemon-reload"}; !slices.Equal(ex.calls, want) {
-		t.Fatalf("ran %v", ex.calls)
+	h := sim.New(t)
+	hosttest.ApplyOne(t, &host.Restart{Exec: h.Exec, Name: "infsh-boxd"})
+	hosttest.ApplyOne(t, &host.DaemonReload{Exec: h.Exec})
+	if want := []string{"systemctl restart infsh-boxd", "systemctl daemon-reload"}; !slices.Equal(h.Exec.Calls(), want) {
+		t.Fatalf("ran %v", h.Exec.Calls())
 	}
-	res, err := runMode((*Runner).Run, Play{Tasks: []Task{{Resource: &Restart{Exec: &fakeExec{respond: func(string) Output { return exit(1) }}, Name: "x"}}}})
-	if err == nil || res[0].Status != Failed || res[0].Msg != "systemctl: exit 1" {
+	if h.Units["infsh-boxd"].Restarts != 1 || h.DaemonReloads != 1 {
+		t.Fatalf("%+v, %d daemon-reloads", *h.Units["infsh-boxd"], h.DaemonReloads)
+	}
+	h.Exec.On("systemctl restart", hosttest.Exit(1))
+	res, err := hosttest.Run(hosttest.Apply, host.Play{Tasks: []host.Task{{Resource: &host.Restart{Exec: h.Exec, Name: "x"}}}})
+	if err == nil || res[0].Status != host.Failed || res[0].Msg != "systemctl: exit 1" {
 		t.Fatalf("a failed restart: %v %+v", err, res)
 	}
 }
