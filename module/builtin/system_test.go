@@ -2,7 +2,6 @@ package builtin_test
 
 import (
 	"context"
-	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -13,42 +12,15 @@ import (
 	"github.com/inference-sh/shigawire/module"
 )
 
-// unit is a fake systemd unit's state.
-type unit struct{ enabled, active bool }
-
-func fakeSystemd(h *hosttest.Host, units map[string]*unit) {
-	h.Exec.Respond = func(line string) host.Output {
-		f := strings.Fields(line)
-		if f[0] != "systemctl" {
-			return host.Output{}
-		}
-		name := f[len(f)-1]
-		u := units[name]
-		if u == nil {
-			u = &unit{}
-			units[name] = u
-		}
-		switch f[1] {
-		case "show":
-			return hosttest.Out(fmt.Sprintf("UnitFileState=%s\nActiveState=%s\n",
-				map[bool]string{true: "enabled", false: "disabled"}[u.enabled], map[bool]string{true: "active", false: "inactive"}[u.active]))
-		case "enable":
-			u.enabled, u.active = true, u.active || f[2] == "--now"
-		case "disable":
-			u.enabled, u.active = false, u.active && f[2] != "--now"
-		case "start":
-			u.active = true
-		case "stop":
-			u.active = false
-		}
-		return host.Output{}
-	}
+// simHost is a simulated host (package sim) and the Env its modules act
+// through.
+func simHost(t *testing.T) (*sim.Host, module.Env) {
+	h := sim.New(t)
+	return h, module.NewEnv(h.Exec, h.Root)
 }
 
 func TestSystemd(t *testing.T) {
-	h, env := newHost(t)
-	units := map[string]*unit{}
-	fakeSystemd(h, units)
+	h, env := simHost(t)
 	unitText := "[Service]\nExecStart=/usr/local/bin/app\n"
 	r := build(t, env, "systemd", map[string]any{"name": "app", "enabled": true, "state": "started", "unit": unitText})
 	if got := hosttest.Converge(t, r, host.Changed); got.Msg != "unit file: create; enable and start" {
@@ -57,12 +29,12 @@ func TestSystemd(t *testing.T) {
 	if h.Read("/etc/systemd/system/app.service") != unitText {
 		t.Fatal("unit file")
 	}
-	if n := len(h.Exec.Ran("systemctl daemon-reload")); n != 1 {
-		t.Fatalf("daemon-reload %d times", n)
+	if u := h.Units["app"]; !u.Enabled || !u.Active || h.DaemonReloads != 1 {
+		t.Fatalf("%+v, daemon-reload %d times", *u, h.DaemonReloads)
 	}
 	hosttest.Converge(t, build(t, env, "service", map[string]any{"name": "app", "enabled": false, "state": "stopped"}), host.Changed)
-	if *units["app"] != (unit{}) {
-		t.Fatal(*units["app"])
+	if u := h.Units["app"]; u.Enabled || u.Active {
+		t.Fatalf("%+v", *u)
 	}
 	refuse(t, env, "systemd", map[string]any{"name": "app"}, "enabled, state or unit")
 	refuse(t, env, "systemd", map[string]any{"name": "app", "state": "restarted"}, "restart and reload modules")
@@ -70,63 +42,12 @@ func TestSystemd(t *testing.T) {
 	refuse(t, env, "systemd", map[string]any{"name": "app", "enabled": "yes"}, "want true or false")
 }
 
-// fakeAccounts answers getent, id and the account commands from a user
-// and a group table.
-func fakeAccounts(h *hosttest.Host) (users map[string]string, groups map[string]int, member map[string][]string) {
-	users, groups, member = map[string]string{}, map[string]int{"adm": 4, "docker": 999}, map[string][]string{}
-	h.Exec.Respond = func(line string) host.Output {
-		f := strings.Fields(line)
-		name := f[len(f)-1]
-		switch f[0] {
-		case "getent":
-			if f[1] == "passwd" {
-				if u, ok := users[name]; ok {
-					return hosttest.Out(u + "\n")
-				}
-			} else if gid, ok := groups[name]; ok {
-				return hosttest.Out(fmt.Sprintf("%s:x:%d:\n", name, gid))
-			}
-			return hosttest.Exit(2)
-		case "id":
-			return hosttest.Out(name + " " + strings.Join(member[name], " ") + "\n")
-		case "useradd":
-			users[name] = fmt.Sprintf("%s:x:1001:1001::/home/%s:/bin/sh", name, name)
-			if i := slices.Index(f, "--shell"); i > 0 {
-				users[name] = fmt.Sprintf("%s:x:1001:1001::/home/%s:%s", name, name, f[i+1])
-			}
-			if i := slices.Index(f, "--groups"); i > 0 {
-				member[name] = strings.Split(f[i+1], ",")
-			}
-		case "usermod":
-			if i := slices.Index(f, "--groups"); i > 0 {
-				member[name] = append(member[name], strings.Split(f[i+1], ",")...)
-			}
-		case "userdel":
-			delete(users, name)
-		case "groupadd":
-			groups[name] = 1500
-			if i := slices.Index(f, "--gid"); i > 0 {
-				var g int
-				fmt.Sscan(f[i+1], &g)
-				groups[name] = g
-			}
-		case "groupdel":
-			delete(groups, name)
-		}
-		return host.Output{}
-	}
-	return users, groups, member
-}
-
 func TestUser(t *testing.T) {
-	h, env := newHost(t)
-	users, _, member := fakeAccounts(h)
+	h, env := simHost(t)
+	h.Groups["docker"] = &sim.Group{GID: 999}
 	hosttest.Converge(t, build(t, env, "user", map[string]any{"name": "deploy", "shell": "/bin/bash", "groups": []any{"docker"}}), host.Changed)
-	if !strings.HasSuffix(users["deploy"], ":/bin/bash") || !slices.Contains(member["deploy"], "docker") {
-		t.Fatal(users, member)
-	}
-	if got := h.Exec.Ran("useradd"); len(got) != 1 || !strings.Contains(got[0], "--create-home") {
-		t.Fatal(got)
+	if u := h.Users["deploy"]; u == nil || u.Shell != "/bin/bash" || !slices.Contains(h.Groups["docker"].Members, "deploy") || !h.Exists("/home/deploy") {
+		t.Fatal(h.Users, h.Groups["docker"])
 	}
 	// Another group is added; docker is kept.
 	h.Exec.Reset()
@@ -134,8 +55,11 @@ func TestUser(t *testing.T) {
 	if got := h.Exec.Ran("usermod"); len(got) != 1 || got[0] != "usermod --append --groups adm deploy" {
 		t.Fatal(got)
 	}
+	if !slices.Contains(h.Groups["docker"].Members, "deploy") || !slices.Contains(h.Groups["adm"].Members, "deploy") {
+		t.Fatal(h.Groups["docker"], h.Groups["adm"])
+	}
 	hosttest.Converge(t, build(t, env, "user", map[string]any{"name": "deploy", "state": "absent"}), host.Changed)
-	if _, ok := users["deploy"]; ok {
+	if h.Users["deploy"] != nil {
 		t.Fatal("not removed")
 	}
 	refuse(t, env, "user", map[string]any{"name": "Bad Name"}, "not a user name")
@@ -145,23 +69,24 @@ func TestUser(t *testing.T) {
 }
 
 func TestGroup(t *testing.T) {
-	h, env := newHost(t)
-	_, groups, _ := fakeAccounts(h)
+	h, env := simHost(t)
 	hosttest.Converge(t, build(t, env, "group", map[string]any{"name": "app", "gid": 2000, "system": true}), host.Changed)
-	if groups["app"] != 2000 {
-		t.Fatal(groups)
+	if g := h.Groups["app"]; g == nil || g.GID != 2000 {
+		t.Fatal(h.Groups)
 	}
 	if got := h.Exec.Ran("groupadd"); len(got) != 1 || got[0] != "groupadd --system --gid 2000 app" {
 		t.Fatal(got)
 	}
 	hosttest.Converge(t, build(t, env, "group", map[string]any{"name": "app", "state": "absent"}), host.Changed)
+	if h.Groups["app"] != nil {
+		t.Fatal("not removed")
+	}
 	refuse(t, env, "group", map[string]any{}, "name is required")
 	refuse(t, env, "group", map[string]any{"name": "app", "gid": -1}, "positive")
 }
 
 func TestSysctl(t *testing.T) {
-	h := sim.New(t)
-	env := module.NewEnv(h.Exec, h.Root)
+	h, env := simHost(t)
 	h.Sysctl["net.ipv4.ip_local_port_range"] = "32768\t60999"
 	h.Write("/etc/sysctl.d/99-shigawire.conf", "net.ipv4.ip_forward=0\nvm.overcommit_memory = 1\n")
 	hosttest.Converge(t, build(t, env, "sysctl", map[string]any{"name": "net.ipv4.ip_forward", "value": "1"}), host.Changed)
@@ -260,8 +185,7 @@ func TestHandlers(t *testing.T) {
 // no_password: a new user gets "*", not useradd's locked "!"; an existing
 // locked one is unlocked; one locked with a hash is an error.
 func TestUserNoPassword(t *testing.T) {
-	h := sim.New(t)
-	env := module.NewEnv(h.Exec, h.Root)
+	h, env := simHost(t)
 	hosttest.Converge(t, build(t, env, "user", map[string]any{"name": "ok", "no_password": true}), host.Changed)
 	if pw := h.Users["ok"].Password; pw != "*" {
 		t.Fatalf("new user: %q", pw)

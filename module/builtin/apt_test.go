@@ -1,7 +1,6 @@
 package builtin_test
 
 import (
-	"slices"
 	"strings"
 	"testing"
 
@@ -10,44 +9,20 @@ import (
 	"github.com/inference-sh/shigawire/module"
 )
 
-// fakeDpkg answers dpkg-query from installed, and apt-get install and
-// remove by changing it.
-func fakeDpkg(h *hosttest.Host, installed ...string) *[]string {
-	pkgs := slices.Clone(installed)
-	h.Exec.Respond = func(line string) host.Output {
-		switch {
-		case strings.HasPrefix(line, "dpkg-query"):
-			var b strings.Builder
-			for _, p := range pkgs {
-				b.WriteString(p + "\tii \t1.0\n")
-			}
-			return hosttest.Out(b.String())
-		case strings.HasPrefix(line, "apt-get") && strings.Contains(line, " install "):
-			pkgs = append(pkgs, strings.Fields(strings.SplitN(line, " install ", 2)[1])...)
-		case strings.HasPrefix(line, "apt-get") && strings.Contains(line, " remove "):
-			for _, p := range strings.Fields(strings.SplitN(line, " remove ", 2)[1]) {
-				pkgs = slices.DeleteFunc(pkgs, func(s string) bool { return s == p })
-			}
-		}
-		return host.Output{}
-	}
-	return &pkgs
-}
-
 func TestApt(t *testing.T) {
-	h, env := newHost(t)
-	pkgs := fakeDpkg(h, "curl")
+	h, env := simHost(t)
+	h.Packages["curl"] = true
 	hosttest.Converge(t, build(t, env, "apt", map[string]any{"name": []any{"curl", "jq"}, "update_cache": true}), host.Changed)
-	if !slices.Contains(*pkgs, "jq") {
-		t.Fatal(*pkgs)
+	if !h.Packages["jq"] {
+		t.Fatal(h.Packages)
 	}
 	if n := len(h.Exec.Ran("apt-get")); n != 2 { // one update, one install
 		t.Fatalf("ran %v", h.Exec.Calls())
 	}
 	h.Exec.Reset()
 	hosttest.Converge(t, build(t, env, "apt", map[string]any{"name": "jq", "state": "purged"}), host.Changed)
-	if got := h.Exec.Ran("apt-get"); len(got) != 1 || !strings.HasSuffix(got[0], "remove --purge jq") {
-		t.Fatal(got)
+	if got := h.Exec.Ran("apt-get"); len(got) != 1 || !strings.HasSuffix(got[0], "remove --purge jq") || h.Packages["jq"] {
+		t.Fatal(got, h.Packages)
 	}
 	// An update alone is an action, once a run: this run updated already.
 	update := map[string]any{"update_cache": true}
