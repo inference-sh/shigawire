@@ -84,11 +84,7 @@ func (b *Block) Apply(ctx context.Context, st State) (Result, error) {
 // them, and with no block leaves content as it is. A begin marker with no
 // end marker after it is an error.
 func withBlock(content []byte, begin, end, block string, absent bool) ([]byte, error) {
-	text := string(content)
-	var lines []string
-	if text != "" {
-		lines = strings.Split(strings.TrimSuffix(text, "\n"), "\n")
-	}
+	lines, _ := splitLines(content)
 	var mine []string
 	if !absent {
 		mine = append(mine, begin)
@@ -118,8 +114,6 @@ func withBlock(content []byte, begin, end, block string, absent bool) ([]byte, e
 	default:
 		out = append(lines, mine...)
 	}
-	if len(out) == 0 {
-		return []byte{}, nil
-	}
-	return []byte(strings.Join(out, "\n") + "\n"), nil
+	// A block always ends in a newline.
+	return joinLines(out, true), nil
 }
