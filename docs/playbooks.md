@@ -352,7 +352,7 @@ It reports:
   registers;
 - `notify` or a handler's `needs` naming no handler, a task's `needs`
   naming no earlier `register`;
-- a relative `src` missing from `files/`.
+- a relative `src`, or an `apt_repo` `key_src`, missing from `files/`.
 
 Every step is checked, the manual ones too; `--only` is not taken.
 

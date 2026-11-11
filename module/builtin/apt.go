@@ -2,6 +2,7 @@ package builtin
 
 import (
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"time"
@@ -72,9 +73,14 @@ type aptRepoArgs struct {
 	Suites     List   `yaml:"suites"`
 	Components List   `yaml:"components"`
 	// KeyURL is where the signing key is fetched from, each run; Key is
-	// the key itself (armored). One of them is required.
+	// the key itself (armored); KeySrc is a file under the playbook's
+	// files/ directory holding it, read when the playbook loads. One of
+	// them is required.
 	KeyURL string `yaml:"key_url"`
 	Key    string `yaml:"key"`
+	KeySrc string `yaml:"key_src"`
+	// KeySHA256 is the hex digest the key fetched from KeyURL must have.
+	KeySHA256 string `yaml:"key_sha256"`
 	// KeyringDir is where the key goes; unset is /etc/apt/keyrings.
 	KeyringDir string `yaml:"keyring_dir"`
 }
@@ -96,8 +102,16 @@ func newAptRepo(env module.Env, a aptRepoArgs) (host.Resource, error) {
 		return nil, errors.New("uris is required")
 	case len(a.Suites) == 0:
 		return nil, errors.New("suites is required")
-	case (a.KeyURL == "") == (a.Key == ""):
-		return nil, errors.New("key_url or key: give one")
+	}
+	switch n := btoi(a.KeyURL != "") + btoi(a.Key != "") + btoi(a.KeySrc != ""); {
+	case n == 0:
+		return nil, errors.New("key_url, key or key_src is required")
+	case n > 1:
+		return nil, errors.New("key_url, key and key_src: give one")
+	case a.KeySHA256 != "" && a.KeyURL == "":
+		return nil, errors.New("key_sha256 is for key_url")
+	case a.KeySHA256 != "" && !sha256Hex.MatchString(a.KeySHA256):
+		return nil, fmt.Errorf("key_sha256 %q: want 64 hex digits", a.KeySHA256)
 	}
 	if a.KeyringDir != "" {
 		if err := absPath("keyring_dir", a.KeyringDir); err != nil {
@@ -105,9 +119,26 @@ func newAptRepo(env module.Env, a aptRepoArgs) (host.Resource, error) {
 		}
 	}
 	r := host.Repo{Name: a.Name, URIs: a.URIs, Suites: a.Suites, Components: a.Components,
-		KeyURL: a.KeyURL, KeyringDir: a.KeyringDir}
-	if a.Key != "" {
+		KeyURL: a.KeyURL, KeySHA256: a.KeySHA256, KeyringDir: a.KeyringDir}
+	switch {
+	case a.Key != "":
 		r.Key = []byte(a.Key)
+	case a.KeySrc != "":
+		b, err := readFiles(env, "key_src", a.KeySrc)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := r.KeyPath(b); err != nil {
+			return nil, fmt.Errorf("key_src %q: %w", a.KeySrc, err)
+		}
+		r.Key = b
 	}
 	return env.Apt.Repo(r), nil
+}
+
+func btoi(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }

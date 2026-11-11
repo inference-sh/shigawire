@@ -38,7 +38,8 @@ type Report struct {
 //   - a when that does not parse;
 //   - a notify or a handler's needs naming no handler, a task's needs
 //     naming no earlier registered task;
-//   - a relative src missing from the playbook's files/ directory.
+//   - a relative src (or apt_repo key_src) missing from the playbook's
+//     files/ directory.
 //
 // Every step is checked, the manual ones too: opt.Only is ignored, and
 // so is opt.Env but for its Files. A task whose when is false when the

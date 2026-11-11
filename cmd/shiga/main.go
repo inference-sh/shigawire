@@ -75,8 +75,8 @@ flags:
 
 check reports every problem, a line each: YAML errors, unknown modules, module
 argument errors, undefined variables, bad when conditions, notify or needs
-naming no handler or registered task, a missing files/ src. It checks every
-step, manual ones too.
+naming no handler or registered task, a missing files/ src or key_src. It
+checks every step, manual ones too.
 
 test is a simulation: packages, units, accounts, sysctl, ufw and docker swarm
 are modelled, and any other command succeeds with no output. It fails when a

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -581,6 +583,10 @@ type Repo struct {
 	Suites     []string
 	Components []string
 	KeyURL     string
+	// KeySHA256 is the hex digest the key fetched from KeyURL must have
+	// ("" checks nothing): a key without it is refused, and nothing is
+	// written.
+	KeySHA256 string
 	// Key is the key itself, in place of KeyURL: one the engine carries.
 	Key []byte
 	// Client fetches the key; nil is one that gives up after a minute.
@@ -657,6 +663,11 @@ func (r *aptRepo) fetchKey(ctx context.Context) ([]byte, error) {
 	key, err := Fetch(ctx, client, r.r.KeyURL, 1<<20)
 	if err != nil {
 		return nil, fmt.Errorf("the key for %s: %w", r.r.Name, err)
+	}
+	if r.r.KeySHA256 != "" {
+		if sum := sha256.Sum256(key); !strings.EqualFold(hex.EncodeToString(sum[:]), r.r.KeySHA256) {
+			return nil, fmt.Errorf("the key for %s: %s: sha256 %x, want %s", r.r.Name, r.r.KeyURL, sum, r.r.KeySHA256)
+		}
 	}
 	return key, nil
 }

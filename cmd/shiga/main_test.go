@@ -272,6 +272,8 @@ func TestCheckProblems(t *testing.T) {
 		{"needs", head + "      - file: {path: /x, content: x}\n        notify: a\n    handlers:\n      - {name: a, needs: b, reload: {name: x}}\n", `needs "b": no handler of that name`, false},
 		{"src", head + "      - copy: {dest: /x, src: nothere.conf}\n", "site.yml:4:9: copy: src: open nothere.conf", true},
 		{"src, no files", head + "      - copy: {dest: /x, src: a/b.conf}\n", `site.yml:4:9: copy: src "a/b.conf": relative, and the playbook has no files/ directory`, false},
+		{"key_src", head + "      - apt_repo: {name: r, uris: u, suites: s, key_src: nothere.asc}\n", "site.yml:4:9: apt_repo: key_src: open nothere.asc", true},
+		{"key_src, no files", head + "      - apt_repo: {name: r, uris: u, suites: s, key_src: r.asc}\n", `site.yml:4:9: apt_repo: key_src "r.asc": relative, and the playbook has no files/ directory`, false},
 		{"manual step", head + "      - file: {path: /x, content: x}\n  - name: m\n    manual: true\n    tasks:\n      - fiel: {}\n", `site.yml:8:9: unknown module "fiel"`, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {

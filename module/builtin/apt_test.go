@@ -1,8 +1,11 @@
 package builtin_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/inference-sh/shigawire/host"
 	"github.com/inference-sh/shigawire/host/hosttest"
@@ -56,7 +59,42 @@ func TestAptRepo(t *testing.T) {
 	if h.Read("/etc/apt/keyrings/docker.asc") != armoredKey {
 		t.Fatal("key")
 	}
-	refuse(t, env, "apt_repo", map[string]any{"name": "x", "uris": "u", "suites": "s"}, "key_url or key")
+	refuse(t, env, "apt_repo", map[string]any{"name": "x", "uris": "u", "suites": "s"}, "key_url, key or key_src is required")
+	refuse(t, env, "apt_repo", map[string]any{"name": "x", "uris": "u", "suites": "s", "key": "k", "key_url": "https://k"}, "give one")
+	refuse(t, env, "apt_repo", map[string]any{"name": "x", "uris": "u", "suites": "s", "key": "k", "key_src": "k.asc"}, "give one")
 	refuse(t, env, "apt_repo", map[string]any{"name": "../x", "uris": "u", "suites": "s", "key": "k"}, "letters")
 	refuse(t, env, "apt_repo", map[string]any{"name": "x", "suites": "s", "key": "k"}, "uris is required")
+}
+
+// key_src is a key file under the playbook's files/ directory, read as
+// copy reads src.
+func TestAptRepoKeySrc(t *testing.T) {
+	h, env := newHost(t)
+	env.Files = fstest.MapFS{"keys/docker.asc": {Data: []byte(armoredKey)}, "notakey": {Data: []byte("<html>\n")}}
+	args := func(src string) map[string]any {
+		return map[string]any{"name": "docker", "uris": "https://download.docker.com/linux/ubuntu", "suites": "noble", "key_src": src}
+	}
+	hosttest.Converge(t, build(t, env, "apt_repo", args("keys/docker.asc")), host.Changed)
+	if h.Read("/etc/apt/keyrings/docker.asc") != armoredKey {
+		t.Fatal("key")
+	}
+	if got := h.Read("/etc/apt/sources.list.d/docker.sources"); !strings.Contains(got, "Signed-By: /etc/apt/keyrings/docker.asc\n") {
+		t.Fatalf("%q", got)
+	}
+	refuse(t, env, "apt_repo", args("missing.asc"), "key_src: open missing.asc")
+	refuse(t, env, "apt_repo", args("../etc/key.asc"), `key_src "../etc/key.asc": not a path inside files/`)
+	refuse(t, env, "apt_repo", args("/etc/key.asc"), "not a path inside files/")
+	refuse(t, env, "apt_repo", args("notakey"), `key_src "notakey": not an OpenPGP public key`)
+	env.Files = nil
+	refuse(t, env, "apt_repo", args("keys/docker.asc"), "no files/ directory")
+}
+
+func TestAptRepoKeySHA256(t *testing.T) {
+	_, env := newHost(t)
+	sum := sha256.Sum256([]byte(armoredKey))
+	args := map[string]any{"name": "x", "uris": "u", "suites": "s", "key_url": "https://k", "key_sha256": strings.ToUpper(hex.EncodeToString(sum[:]))}
+	build(t, env, "apt_repo", args)
+	args["key_sha256"] = "abc"
+	refuse(t, env, "apt_repo", args, `key_sha256 "abc": want 64 hex digits`)
+	refuse(t, env, "apt_repo", map[string]any{"name": "x", "uris": "u", "suites": "s", "key": armoredKey, "key_sha256": hex.EncodeToString(sum[:])}, "key_sha256 is for key_url")
 }

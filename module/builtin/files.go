@@ -73,7 +73,7 @@ func fileResource(env module.Env, key, path string, a FileArgs) (host.Resource, 
 	case filepath.IsAbs(a.Src):
 		from = env.Path(a.Src)
 	default:
-		b, err := readFiles(env, a.Src)
+		b, err := readFiles(env, "src", a.Src)
 		if err != nil {
 			return nil, err
 		}
@@ -84,18 +84,19 @@ func fileResource(env module.Env, key, path string, a FileArgs) (host.Resource, 
 	})
 }
 
-// readFiles reads a relative src argument from env.Files.
-func readFiles(env module.Env, src string) ([]byte, error) {
+// readFiles reads src, the relative path in the argument key (src,
+// key_src), from env.Files.
+func readFiles(env module.Env, key, src string) ([]byte, error) {
 	if env.Files == nil {
-		return nil, fmt.Errorf("src %q: relative, and the playbook has no files/ directory", src)
+		return nil, fmt.Errorf("%s %q: relative, and the playbook has no files/ directory", key, src)
 	}
 	name := filepath.ToSlash(filepath.Clean(src))
 	if !fs.ValidPath(name) {
-		return nil, fmt.Errorf("src %q: not a path inside files/", src)
+		return nil, fmt.Errorf("%s %q: not a path inside files/", key, src)
 	}
 	b, err := fs.ReadFile(env.Files, name)
 	if err != nil {
-		return nil, fmt.Errorf("src: %w", err)
+		return nil, fmt.Errorf("%s: %w", key, err)
 	}
 	return b, nil
 }

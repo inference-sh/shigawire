@@ -2,6 +2,8 @@ package host
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"maps"
 	"net/http"
@@ -451,6 +453,30 @@ func TestApt_Repo(t *testing.T) {
 		if _, err := repo.Check(context.Background()); err == nil || !strings.Contains(err.Error(), "not an OpenPGP public key") {
 			t.Fatalf("%q: err %v", k, err)
 		}
+	}
+}
+
+// With KeySHA256, a fetched key that does not have it is refused, and
+// nothing is written; one that has it is.
+func TestApt_RepoKeySHA256(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, testKey) }))
+	defer srv.Close()
+	root := t.TempDir()
+	a := &Apt{Exec: &fakeExec{}, Root: root}
+	sum := sha256.Sum256([]byte(testKey))
+	repo := Repo{Name: "r", URIs: []string{"https://example.invalid/apt"}, Suites: []string{"/"}, KeyURL: srv.URL,
+		KeySHA256: strings.Repeat("0", 64)}
+	r := a.Repo(repo)
+	if _, err := r.Check(context.Background()); err == nil || !strings.Contains(err.Error(), "sha256 "+hex.EncodeToString(sum[:])+", want "+repo.KeySHA256) {
+		t.Fatalf("err %v", err)
+	}
+	if ents, _ := os.ReadDir(filepath.Join(root, "etc/apt")); len(ents) != 0 {
+		t.Fatalf("wrote %v", ents)
+	}
+	repo.KeySHA256 = strings.ToUpper(hex.EncodeToString(sum[:]))
+	apply(t, a.Repo(repo))
+	if b, _ := os.ReadFile(filepath.Join(root, "etc/apt/keyrings/r.asc")); string(b) != testKey {
+		t.Fatalf("key %q", b)
 	}
 }
 

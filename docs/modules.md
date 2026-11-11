@@ -220,7 +220,9 @@ An apt source in deb822 form and its signing key. The key goes in
 `keyring_dir/<name>.asc` (`.gpg` for a binary key), the source in
 `/etc/apt/sources.list.d/<name>.sources` with `Signed-By` naming the key.
 A key from `key_url` is fetched every run, so a rotated key is picked
-up. A changed key or source makes the next apt update due.
+up; with `key_sha256` a fetched key without that digest is refused, and
+nothing is written. A changed key or source makes the next apt update
+due.
 
 | key | type | |
 |---|---|---|
@@ -229,10 +231,12 @@ up. A changed key or source makes the next apt update due.
 | `suites` | list | required |
 | `components` | list | |
 | `key_url` | URL | where the key is fetched from |
+| `key_sha256` | string | with `key_url`: 64 hex digits the fetched key must have |
 | `key` | string | the key itself, armored |
+| `key_src` | path | a key file under the playbook's `files/` directory, read when the playbook loads, as `src` is for `file` |
 | `keyring_dir` | path | default `/etc/apt/keyrings` |
 
-One of `key_url` and `key` is required.
+Exactly one of `key_url`, `key` and `key_src` is required.
 
 ```yaml
 - apt_repo:
@@ -242,6 +246,17 @@ One of `key_url` and `key` is required.
     components: stable
     key_url: https://download.docker.com/linux/ubuntu/gpg
 - apt: { name: docker-ce, update_cache: true }
+```
+
+A key kept with the playbook, in `files/tailscale.asc`:
+
+```yaml
+- apt_repo:
+    name: tailscale
+    uris: https://pkgs.tailscale.com/stable/ubuntu
+    suites: noble
+    components: main
+    key_src: tailscale.asc
 ```
 
 ## systemd, service

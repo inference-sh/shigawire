@@ -87,7 +87,7 @@ steps:
           restore: ["/etc/nginx/sites-enabled/${DOMAIN}"]
 ```
 
-A playbook is a list of **steps**. A step holds **tasks**, and each task names one **module** with its arguments. Tasks **notify** **handlers**, which run once at the end of the step if something changed. Files named by `src` live in `files/` next to the playbook.
+A playbook is a list of **steps**. A step holds **tasks**, and each task names one **module** with its arguments. Tasks **notify** **handlers**, which run once at the end of the step if something changed. Files named by `src` (and `apt_repo`'s `key_src`) live in `files/` next to the playbook.
 
 - **Variables:** `${NAME}`, from the playbook's `vars`, `--vars FILE` (YAML, or `NAME=VALUE` lines in a `.env` file), `SHIGA_VAR_NAME` in the environment, and `--var NAME=VALUE`, in that order. An undefined variable is an error with its file and line.
 - **Conditions:** `when: os.id == ubuntu`, `when: ${ENABLE_TLS}`, `when: docker.rc != 0` on a result saved with `register: docker`.
