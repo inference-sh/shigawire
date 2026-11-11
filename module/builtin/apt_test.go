@@ -7,6 +7,7 @@ import (
 
 	"github.com/inference-sh/shigawire/host"
 	"github.com/inference-sh/shigawire/host/hosttest"
+	"github.com/inference-sh/shigawire/module"
 )
 
 // fakeDpkg answers dpkg-query from installed, and apt-get install and
@@ -48,8 +49,12 @@ func TestApt(t *testing.T) {
 	if got := h.Exec.Ran("apt-get"); len(got) != 1 || !strings.HasSuffix(got[0], "remove --purge jq") {
 		t.Fatal(got)
 	}
-	// An update alone, every run, is an action: changed each time.
-	if r := hosttest.ApplyOne(t, build(t, env, "apt", map[string]any{"update_cache": true})); r.Status != host.Changed || !r.Action {
+	// An update alone is an action, once a run: this run updated already.
+	update := map[string]any{"update_cache": true}
+	if r := hosttest.ApplyOne(t, build(t, env, "apt", update)); r.Status != host.OK {
+		t.Fatalf("second update in a run: %s", r.Status)
+	}
+	if r := hosttest.ApplyOne(t, build(t, module.NewEnv(h.Exec, h.Root), "apt", update)); r.Status != host.Changed || !r.Action {
 		t.Fatalf("%s action=%v", r.Status, r.Action)
 	}
 }

@@ -201,8 +201,10 @@ in a run shares one read of what dpkg has installed.
 With `name` and `update_cache`, the lists are updated only when a
 package is missing, right before the install. With `update_cache` alone,
 the update is an action, run every time unless `cache_valid_time` says
-the lists are new enough; a source added or changed in the run makes the
-next update due whatever their age. `update_cache` with `absent` or
+the lists are new enough. Without `cache_valid_time`, the lists are
+updated once in a run: a later task that asks again finds them updated.
+A source added or changed in the run makes the next update due whatever
+their age. `update_cache` with `absent` or
 `purged` is refused. A virtual package name never matches what dpkg has
 installed: name the package that provides it.
 
@@ -329,9 +331,10 @@ with `groupdel`.
 A kernel parameter, set in a sysctl.d drop-in and in the running
 kernel. The drop-in gets `key = value` in place of any line that sets
 the key. When the line changed, or the kernel has another value,
-`sysctl -p <file>` loads the drop-in (every key in it), and the kernel's
-value is read again: one that still differs is an error. Values compare
-with their whitespace collapsed (the kernel prints some tab-separated).
+`sysctl -w key=value` sets the key alone (the drop-in's other keys are
+their own tasks'), and the kernel's value is read again: one that still
+differs is an error. Values compare with their whitespace collapsed (the
+kernel prints some tab-separated).
 
 | key | type | |
 |---|---|---|
