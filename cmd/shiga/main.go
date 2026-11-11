@@ -202,24 +202,17 @@ func (c *cli) run(ctx context.Context, cmd string, args []string) int {
 		return exitFailed
 	}
 	counts := map[host.Status]int{}
-	// A plan's unknowns. stuck are those apply fails at whatever runs
-	// before them: a Refusal (a fail task, a swarm that is locked), or a
-	// check that failed with no change planned before it, so apply reads
-	// the same host there. waiting are the others, which may depend on a
-	// change before them (a user apply creates): the plan cannot tell.
+	// A plan's unknowns: stuck are those apply fails at whatever runs
+	// before them (Result.Blocked); waiting may depend on a change before
+	// them, which the plan cannot tell.
 	var waiting, stuck int
-	changedBefore := false
 	r := &host.Runner{OnResult: func(rr host.Result) {
 		counts[rr.Status]++
 		switch {
-		case rr.Status != host.Unknown:
-		case host.IsRefusal(rr.Err) || !changedBefore:
+		case rr.Blocked:
 			stuck++
-		default:
+		case rr.Status == host.Unknown:
 			waiting++
-		}
-		if rr.Status == host.Changed {
-			changedBefore = true
 		}
 		c.line(rr, *quiet)
 	}}
@@ -362,17 +355,16 @@ func (c *cli) test(ctx context.Context, args []string) int {
 		fmt.Fprintf(c.stderr, "shiga: %v\n", err)
 		return exitFailed
 	}
-	runs := []struct {
-		name string
-		rs   []host.Result
-		ran  bool
+	for _, r := range []struct {
+		name  string
+		stage simrun.Stage
+		rs    []host.Result
 	}{
-		{"apply", o.Apply, true},
-		{"apply again", o.Again, o.Failed != simrun.StageApply},
-		{"verify", o.Verify, o.Failed == "" || o.Failed == simrun.StageVerify},
-	}
-	for _, r := range runs {
-		if r.ran {
+		{"apply", simrun.StageApply, o.Apply},
+		{"apply again", simrun.StageAgain, o.Again},
+		{"verify", simrun.StageVerify, o.Verify},
+	} {
+		if o.Ran(r.stage) {
 			c.summary(r.name, countOf(r.rs))
 		}
 	}
@@ -389,7 +381,9 @@ func (c *cli) test(ctx context.Context, args []string) int {
 			fmt.Fprintf(c.stdout, "FAIL: apply again: %s\n", oneLine(o.Err.Error()))
 			break
 		}
-		c.lines(o.Again, func(r host.Result) bool { return r.Status == host.Changed && (r.Handler || !r.Action) })
+		for _, r := range o.Changed {
+			c.line(r, false)
+		}
 		fmt.Fprintf(c.stdout, "FAIL: apply again changed %d: the playbook does not converge\n", len(o.Changed))
 	case simrun.StageVerify:
 		c.lines(o.Verify, func(r host.Result) bool { return r.Status != host.OK && r.Status != host.Skipped })

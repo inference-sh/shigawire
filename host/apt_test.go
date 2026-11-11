@@ -197,7 +197,7 @@ func TestApt_UpdateAfterASourceChanged(t *testing.T) {
 			{Resource: a.Update(time.Hour)},
 		}}
 	}
-	if _, err := runPlay(context.Background(), play(a)); err == nil || !strings.Contains(err.Error(), "3 tries") {
+	if _, err := runMode((*Runner).Run, play(a)); err == nil || !strings.Contains(err.Error(), "3 tries") {
 		t.Fatalf("err %v", err)
 	}
 	if n := len(ex.ran("apt-get")); n != updateTries {
@@ -210,7 +210,7 @@ func TestApt_UpdateAfterASourceChanged(t *testing.T) {
 	// The next run, a new Apt: the repo is in place, and the update is
 	// still due.
 	failing = false
-	got, err := runPlay(context.Background(), play(&Apt{Exec: ex, Root: root}))
+	got, err := runMode((*Runner).Run, play(&Apt{Exec: ex, Root: root}))
 	if err != nil || got[0].Status != OK || got[1].Status != Changed || got[1].Msg != "updated: a source changed" {
 		t.Fatalf("second run %+v %v", got, err)
 	}

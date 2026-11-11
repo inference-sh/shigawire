@@ -87,5 +87,5 @@ func Load(h *hosttest.Host, path string, opt playbook.Options) (*playbook.Playbo
 // Results runs f (a Playbook's Apply, Plan or Verify) and returns every
 // result and the run's error.
 func Results(ctx context.Context, f func(context.Context, *host.Runner) error) ([]host.Result, error) {
-	return simrun.Results(ctx, f)
+	return hosttest.Results(ctx, f)
 }

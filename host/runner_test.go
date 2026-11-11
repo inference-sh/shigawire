@@ -52,7 +52,7 @@ func TestRunner_NotifiedHandlersRunOnceAtTheEnd(t *testing.T) {
 		},
 		Handlers: []*Handler{reload, restart, other},
 	}
-	res, err := runPlay(context.Background(), p)
+	res, err := runMode((*Runner).Run, p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestRunner_UnlistedHandlersRunLast(t *testing.T) {
 	b := &Handler{Name: "b", Resource: &stub{id: "b", log: &log}}
 	listed := &Handler{Name: "listed", Resource: &stub{id: "listed", log: &log}}
 	p := Play{Tasks: []Task{{Resource: &stub{id: "t", log: &log}, Notify: []*Handler{b, a, listed}}}, Handlers: []*Handler{listed}}
-	if _, err := runPlay(context.Background(), p); err != nil {
+	if _, err := runMode((*Runner).Run, p); err != nil {
 		t.Fatal(err)
 	}
 	if want := []string{"t", "listed", "b", "a"}; !slices.Equal(log, want) {
@@ -94,7 +94,7 @@ func TestRunner_FlushRunsHandlersInPlace(t *testing.T) {
 		},
 		Handlers: []*Handler{reload},
 	}
-	if _, err := runPlay(context.Background(), p); err != nil {
+	if _, err := runMode((*Runner).Run, p); err != nil {
 		t.Fatal(err)
 	}
 	if want := []string{"unit", "reload", "start"}; !slices.Equal(log, want) {
@@ -117,7 +117,7 @@ func TestRunner_FailureStopsAndFlushes(t *testing.T) {
 		},
 		Handlers: []*Handler{reload, restart},
 	}
-	res, err := runPlay(context.Background(), p)
+	res, err := runMode((*Runner).Run, p)
 	if !errors.Is(err, boom) {
 		t.Fatalf("err %v, want boom", err)
 	}
@@ -135,7 +135,7 @@ func TestRunner_RefusesABadPlay(t *testing.T) {
 		"empty handler": {Tasks: []Task{{Resource: &stub{id: "a", log: &log}, Notify: []*Handler{{Name: "nope"}}}}},
 		"no resource":   {Tasks: []Task{{Name: "empty"}}},
 	} {
-		if _, err := runPlay(context.Background(), p); err == nil {
+		if _, err := runMode((*Runner).Run, p); err == nil {
 			t.Errorf("%s: ran", name)
 		}
 	}
@@ -148,7 +148,7 @@ func TestRunner_StopsWhenCanceled(t *testing.T) {
 	var log []string
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err := runPlay(ctx, Play{Tasks: []Task{{Resource: &stub{id: "a", log: &log}}}})
+	err := (&Runner{}).Run(ctx, Play{Tasks: []Task{{Resource: &stub{id: "a", log: &log}}}})
 	if !errors.Is(err, context.Canceled) || len(log) != 0 {
 		t.Fatalf("err %v, applied %v", err, log)
 	}
@@ -161,7 +161,7 @@ func TestRunner_IgnoreErrors(t *testing.T) {
 		{Name: "fm", IgnoreErrors: true, Resource: &stub{id: "fm", fail: errors.New("no unit"), log: &log}},
 		{Name: "b", Resource: &stub{id: "b", log: &log}},
 	}}
-	got, err := runPlay(context.Background(), p)
+	got, err := runMode((*Runner).Run, p)
 	if err != nil || statuses(got) != "fm=ignored b=changed" || got[0].Err == nil {
 		t.Fatalf("%s %v", statuses(got), err)
 	}
@@ -176,12 +176,12 @@ func TestLazy(t *testing.T) {
 		made++
 		return &stub{id: "made", log: &log}, nil
 	}}
-	got, err := runPlay(context.Background(), Play{Tasks: []Task{{Resource: l}}})
+	got, err := runMode((*Runner).Run, Play{Tasks: []Task{{Resource: l}}})
 	if err != nil || statuses(got) != "later=changed" || made != 1 || got[0].Msg != "did made" {
 		t.Fatalf("%s %v, made %d", statuses(got), err, made)
 	}
 	none := &Lazy{Name: "none", Make: func(context.Context) (Resource, error) { return nil, nil }}
-	if got, err := runPlay(context.Background(), Play{Tasks: []Task{{Resource: none}}}); err != nil || statuses(got) != "none=ok" {
+	if got, err := runMode((*Runner).Run, Play{Tasks: []Task{{Resource: none}}}); err != nil || statuses(got) != "none=ok" {
 		t.Fatalf("nothing to do: %s %v", statuses(got), err)
 	}
 	bad := &Lazy{Name: "bad", Make: func(context.Context) (Resource, error) { return nil, errors.New("no uuid") }}
@@ -199,7 +199,7 @@ func TestAssertAndAction(t *testing.T) {
 		{Name: "stop", Resource: &Assert{Name: "stop", Holds: func(context.Context) error { return errors.New("not blank") }}},
 		{Name: "never", Resource: &stub{id: "never", log: &log}},
 	}, Handlers: []*Handler{h}}
-	got, err := runPlay(context.Background(), p)
+	got, err := runMode((*Runner).Run, p)
 	if err == nil || statuses(got) != "blank=ok key=changed stop=failed h=changed" || strings.Join(log, " ") != "h" {
 		t.Fatalf("%s %v %v", statuses(got), err, log)
 	}

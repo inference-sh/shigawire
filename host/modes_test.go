@@ -10,12 +10,6 @@ import (
 	"testing"
 )
 
-func runMode(m func(*Runner, context.Context, Play) error, p Play) ([]Result, error) {
-	var got []Result
-	err := m(&Runner{OnResult: func(r Result) { got = append(got, r) }}, context.Background(), p)
-	return got, err
-}
-
 // checkFails is a resource whose Check fails.
 type checkFails struct{ err error }
 
@@ -65,6 +59,33 @@ func TestRunner_PlanChangesNothing(t *testing.T) {
 	}
 }
 
+// A plan's Unknown is Blocked when no change planned before it explains
+// it: before any change, or a Refusal anywhere. Run and Verify never set
+// it.
+func TestRunner_PlanBlocked(t *testing.T) {
+	p := Play{Tasks: []Task{
+		{Resource: &checkFails{errors.New("no docker")}},
+		{Resource: &stub{id: "change"}},
+		{Name: "owner", Resource: &checkFails{errors.New("no user app")}},
+		{Name: "fail", Resource: &checkFails{Refusal(errors.New("DOMAIN is empty"))}},
+	}}
+	got, err := runMode((*Runner).Plan, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var blocked []bool
+	for _, r := range got {
+		blocked = append(blocked, r.Blocked)
+	}
+	if !slices.Equal(blocked, []bool{true, false, false, true}) {
+		t.Fatalf("blocked %v: %s", blocked, statuses(got))
+	}
+	got, _ = runMode((*Runner).Verify, p)
+	if slices.ContainsFunc(got, func(r Result) bool { return r.Blocked }) {
+		t.Fatalf("verify set Blocked: %+v", got)
+	}
+}
+
 // Verify reports drift, runs no action and no handler, reads every task,
 // and fails when anything drifted or is unknown.
 func TestRunner_Verify(t *testing.T) {
@@ -107,7 +128,7 @@ func TestRunner_Warning(t *testing.T) {
 		{Resource: &stub{id: "next", log: &log}},
 		{Resource: &Assert{Name: "assert", Warn: true, Holds: func(context.Context) error { return errors.New("no") }}},
 	}}
-	got, err := runPlay(context.Background(), p)
+	got, err := runMode((*Runner).Run, p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +155,7 @@ func TestRunner_HandlerNeeds(t *testing.T) {
 		Tasks:    []Task{{Resource: &stub{id: "t", log: &log}, Notify: []*Handler{after, reload, validate, other}}},
 		Handlers: []*Handler{after, reload, validate, other},
 	}
-	got, err := runPlay(context.Background(), p)
+	got, err := runMode((*Runner).Run, p)
 	if err == nil || !strings.Contains(err.Error(), `not run: handler "validate" failed`) {
 		t.Fatalf("err %v", err)
 	}
@@ -149,7 +170,7 @@ func TestRunner_HandlerNeeds(t *testing.T) {
 	validate.Resource = &stub{id: "validate", log: &log}
 	p.Tasks[0].Resource = &stub{id: "t", log: &log}
 	other.Resource = &stub{id: "other", log: &log}
-	if _, err := runPlay(context.Background(), p); err != nil {
+	if _, err := runMode((*Runner).Run, p); err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Equal(log, []string{"t", "validate", "reload", "after", "other"}) {
@@ -180,7 +201,7 @@ func TestValidated_PutsBack(t *testing.T) {
 		},
 		Handlers: []*Handler{validate, reload},
 	}
-	got, err := runPlay(context.Background(), p)
+	got, err := runMode((*Runner).Run, p)
 	if err == nil {
 		t.Fatal("no error")
 	}
@@ -201,7 +222,7 @@ func TestValidated_PutsBack(t *testing.T) {
 	}
 
 	valid = true
-	got, err = runPlay(context.Background(), p)
+	got, err = runMode((*Runner).Run, p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +259,7 @@ func TestProbe(t *testing.T) {
 	on = false
 	stuck := *p
 	stuck.Fix = []Cmd{{Name: "true"}}
-	if _, err := runPlay(context.Background(), Play{Tasks: []Task{{Resource: &stuck}}}); err == nil || !strings.Contains(err.Error(), "ran true, and still forwarding off") {
+	if _, err := runMode((*Runner).Run, Play{Tasks: []Task{{Resource: &stuck}}}); err == nil || !strings.Contains(err.Error(), "ran true, and still forwarding off") {
 		t.Fatal(err)
 	}
 	// No fix: a check.
@@ -343,7 +364,7 @@ func TestBlock(t *testing.T) {
 
 func TestFile_Parents(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "a", "b", "f")
-	if _, err := runPlay(context.Background(), Play{Tasks: []Task{{Resource: &File{Path: path, Content: []byte("x")}}}}); err == nil {
+	if _, err := runMode((*Runner).Run, Play{Tasks: []Task{{Resource: &File{Path: path, Content: []byte("x")}}}}); err == nil {
 		t.Fatal("made the parents without Parents")
 	}
 	converge(t, &File{Path: path, Content: []byte("x"), Parents: true}, Changed)
@@ -407,7 +428,7 @@ func TestValidated_Wrapped(t *testing.T) {
 		os.WriteFile(conf, []byte("old\n"), 0o600)
 		h := &Handler{Name: "validate", Resource: tc.r}
 		p := Play{Tasks: []Task{{Resource: &File{Path: conf, Content: []byte("bad\n")}, Notify: []*Handler{h}}}, Handlers: []*Handler{h}}
-		_, err := runPlay(context.Background(), p)
+		_, err := runMode((*Runner).Run, p)
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Fatalf("%s: %v", tc.name, err)
 		}

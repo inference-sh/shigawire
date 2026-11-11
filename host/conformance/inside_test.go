@@ -4,7 +4,6 @@ package conformance
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -23,11 +22,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
 	"github.com/inference-sh/shigawire/host"
+	"github.com/inference-sh/shigawire/host/hosttest"
 )
 
 // tcase is one resource on a real host. Each run gets fresh resources
@@ -73,17 +72,16 @@ func TestInside(t *testing.T) {
 }
 
 func (h *box) check(t *testing.T, c tcase) {
-	ctx := t.Context()
 	if c.setup != nil {
 		c.setup(t)
 	}
 	run := func(phase string, dry bool, want func(i int) host.Status) {
 		t.Helper()
-		run := runPlay
+		mode := hosttest.Apply
 		if dry {
-			run = checkPlay
+			mode = hosttest.Plan
 		}
-		got, err := run(ctx, c.play(&host.Apt{Exec: h.x}))
+		got, err := hosttest.Run(mode, c.play(&host.Apt{Exec: h.x}))
 		for _, g := range got {
 			t.Logf("%s: %-8s %s: %s", phase, g.Status, g.Name, g.Msg)
 		}
@@ -139,44 +137,6 @@ func (h *box) check(t *testing.T, c tcase) {
 	} else {
 		dry("check again", all(host.OK))
 	}
-}
-
-// runPlay runs p and returns every result.
-func runPlay(ctx context.Context, p host.Play) ([]host.Result, error) {
-	var got []host.Result
-	err := (&host.Runner{OnResult: func(r host.Result) { got = append(got, r) }}).Run(ctx, p)
-	return got, err
-}
-
-// checkPlay is p's dry run: every task's Check, a task not in place
-// reported Changed with its drift, and the handlers it notified as
-// Changed too. It must change nothing on the host.
-func checkPlay(ctx context.Context, p host.Play) ([]host.Result, error) {
-	var got []host.Result
-	var notified []*host.Handler
-	for _, t := range p.Tasks {
-		if t.Resource == nil { // a flush
-			continue
-		}
-		st, err := t.Resource.Check(ctx)
-		if err != nil {
-			return got, err
-		}
-		r := host.Result{Name: cmp.Or(t.Name, t.Resource.ID()), Status: host.OK}
-		if !st.InPlace {
-			r.Status, r.Msg = host.Changed, st.Drift
-			for _, h := range t.Notify {
-				if !slices.Contains(notified, h) {
-					notified = append(notified, h)
-				}
-			}
-		}
-		got = append(got, r)
-	}
-	for _, h := range notified {
-		got = append(got, host.Result{Name: h.Name, Status: host.Changed, Msg: "would run", Handler: true})
-	}
-	return got, nil
 }
 
 // box is the container the cases run in.
@@ -575,7 +535,7 @@ func (h *box) cases() []tcase {
 func (h *box) badSHA256(t *testing.T) {
 	const path = "/usr/local/bin/res-bad"
 	_ = os.Remove(path)
-	got, err := runPlay(t.Context(), host.Play{Tasks: []host.Task{{Resource: &host.Download{
+	got, err := hosttest.Run(hosttest.Apply, host.Play{Tasks: []host.Task{{Resource: &host.Download{
 		URL: h.srv.URL + "/payload", Path: path, SHA256: strings.Repeat("0", 64)}}}})
 	if err == nil || len(got) != 1 || got[0].Status != host.Failed {
 		t.Fatalf("got %+v, %v; want a failure", got, err)
@@ -593,7 +553,7 @@ func (h *box) badSHA256(t *testing.T) {
 func (h *box) asideTaken(t *testing.T) {
 	const path, aside = "/etc/res-taken", "/etc/res-taken.orig"
 	h.sh(t, "rm -rf "+path+" "+aside+" && mkdir -p "+path+" "+aside+" && echo mine > "+path+"/x && echo earlier > "+aside+"/x")
-	got, err := runPlay(t.Context(), host.Play{Tasks: []host.Task{{Resource: &host.Symlink{Path: path, Target: "/etc/hostname", Aside: aside}}}})
+	got, err := hosttest.Run(hosttest.Apply, host.Play{Tasks: []host.Task{{Resource: &host.Symlink{Path: path, Target: "/etc/hostname", Aside: aside}}}})
 	if err == nil || len(got) != 1 || got[0].Status != host.Failed {
 		t.Fatalf("got %+v, %v; want a failure", got, err)
 	}
@@ -609,7 +569,7 @@ func (h *box) asideTaken(t *testing.T) {
 func (h *box) danglingLink(t *testing.T) {
 	const link = "/etc/res-dangling"
 	h.sh(t, "rm -f "+link+" && ln -s /nonexistent/res-fstab "+link)
-	if _, err := runPlay(t.Context(), host.Play{Tasks: []host.Task{{Resource: &host.Line{Path: link, Line: "x"}}}}); err == nil {
+	if _, err := hosttest.Run(hosttest.Apply, host.Play{Tasks: []host.Task{{Resource: &host.Line{Path: link, Line: "x"}}}}); err == nil {
 		t.Fatal("a line through a link to nothing passed")
 	}
 	if got, err := os.Readlink(link); err != nil || got != "/nonexistent/res-fstab" {
@@ -655,8 +615,8 @@ func snapshot(t *testing.T) map[string]string {
 			if err != nil {
 				return nil
 			}
-			st := fi.Sys().(*syscall.Stat_t)
-			v := fmt.Sprintf("%s %d:%d %d %d", fi.Mode(), st.Uid, st.Gid, fi.Size(), fi.ModTime().UnixNano())
+			o, _ := host.FileOwner(fi)
+			v := fmt.Sprintf("%s %s %d %d", fi.Mode(), o, fi.Size(), fi.ModTime().UnixNano())
 			if fi.Mode()&fs.ModeSymlink != 0 {
 				l, _ := os.Readlink(p)
 				v += " -> " + l
@@ -745,8 +705,7 @@ func (h *box) modeOwner(path string, mode fs.FileMode, owner host.Owner) error {
 	if fi.Mode() != mode {
 		return fmt.Errorf("%s is %s, want %s", path, fi.Mode(), mode)
 	}
-	st := fi.Sys().(*syscall.Stat_t)
-	if got := (host.Owner{UID: int(st.Uid), GID: int(st.Gid)}); got != owner {
+	if got, _ := host.FileOwner(fi); got != owner {
 		return fmt.Errorf("%s is owned by %s, want %s", path, got, owner)
 	}
 	return nil
