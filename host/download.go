@@ -31,6 +31,8 @@ type Download struct {
 	// new one 0644. The file is the writer's.
 	Mode  fs.FileMode
 	Force bool
+	// Client fetches the URL; nil is one that gives up after 30 minutes.
+	Client *http.Client
 }
 
 func (d *Download) ID() string { return "download " + d.URL + " to " + d.Path }
@@ -79,8 +81,11 @@ func (d *Download) Apply(ctx context.Context, st State) (Result, error) {
 		}
 		return changed("%s", st.Drift)
 	}
-	// A download gives up after 30 minutes.
-	resp, err := get(ctx, &http.Client{Timeout: 30 * time.Minute}, d.URL)
+	client := d.Client
+	if client == nil {
+		client = &http.Client{Timeout: 30 * time.Minute}
+	}
+	resp, err := get(ctx, client, d.URL)
 	if err != nil {
 		return Result{}, err
 	}

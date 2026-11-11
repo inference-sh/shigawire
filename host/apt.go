@@ -473,6 +473,8 @@ type Repo struct {
 	KeyURL     string
 	// Key is the key itself, in place of KeyURL: one the engine carries.
 	Key []byte
+	// Client fetches the key; nil is one that gives up after a minute.
+	Client *http.Client
 	// KeyringDir is the directory the key goes in, as the host knows it;
 	// "" is /etc/apt/keyrings. It is made when missing.
 	KeyringDir string
@@ -538,7 +540,11 @@ func (r *aptRepo) fetchKey(ctx context.Context) ([]byte, error) {
 	if r.r.Key != nil {
 		return r.r.Key, nil
 	}
-	key, err := fetch(ctx, &http.Client{Timeout: time.Minute}, r.r.KeyURL, 1<<20)
+	client := r.r.Client
+	if client == nil {
+		client = &http.Client{Timeout: time.Minute}
+	}
+	key, err := fetch(ctx, client, r.r.KeyURL, 1<<20)
 	if err != nil {
 		return nil, fmt.Errorf("the key for %s: %w", r.r.Name, err)
 	}
