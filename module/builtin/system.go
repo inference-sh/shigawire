@@ -155,8 +155,8 @@ func newGroup(env module.Env, a groupArgs) (host.Resource, error) {
 	return &host.Group{Exec: env.Exec, Name: a.Name, GID: a.GID, System: a.System, Absent: state == "absent"}, nil
 }
 
-// defaultSysctlFile is sysctl's drop-in when a task names none.
-const defaultSysctlFile = "/etc/sysctl.d/99-shigawire.conf"
+// DefaultSysctlFile is sysctl's drop-in when a task names none.
+const DefaultSysctlFile = "/etc/sysctl.d/99-shigawire.conf"
 
 var sysctlKey = regexp.MustCompile(`^[a-z0-9_]+([./][A-Za-z0-9_*-]+)+$`)
 
@@ -181,7 +181,7 @@ func newSysctl(env module.Env, a sysctlArgs) (host.Resource, error) {
 	}
 	file := a.File
 	if file == "" {
-		file = defaultSysctlFile
+		file = DefaultSysctlFile
 	}
 	if err := absPath("file", file); err != nil {
 		return nil, err

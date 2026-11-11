@@ -8,6 +8,8 @@ import (
 
 	"github.com/inference-sh/shigawire/host"
 	"github.com/inference-sh/shigawire/host/hosttest"
+	"github.com/inference-sh/shigawire/module"
+	"github.com/inference-sh/shigawire/module/builtin"
 )
 
 func TestFile(t *testing.T) {
@@ -150,4 +152,19 @@ func TestBlock(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 	refuse(t, env, "block", map[string]any{"path": "/etc/hosts", "marker": "# managed"}, "{mark}")
+}
+
+// A module of another package's that writes a file embeds FileArgs and
+// takes file's keys for it.
+func TestFileArgsEmbedded(t *testing.T) {
+	var a struct {
+		Name             string `yaml:"name"`
+		builtin.FileArgs `yaml:",inline"`
+	}
+	if err := module.Decode(map[string]any{"name": "x", "content": "hi\n", "mode": "0600", "parents": true}, &a); err != nil {
+		t.Fatal(err)
+	}
+	if a.Name != "x" || a.Content == nil || *a.Content != "hi\n" || a.Mode != 0o600 || !a.Parents {
+		t.Fatalf("%+v", a)
+	}
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/inference-sh/shigawire/host/hosttest"
 	"github.com/inference-sh/shigawire/host/hosttest/sim"
 	"github.com/inference-sh/shigawire/module"
+	"github.com/inference-sh/shigawire/module/builtin"
 )
 
 // simHost is a simulated host (package sim) and the Env its modules act
@@ -88,9 +89,9 @@ func TestGroup(t *testing.T) {
 func TestSysctl(t *testing.T) {
 	h, env := simHost(t)
 	h.Sysctl["net.ipv4.ip_local_port_range"] = "32768\t60999"
-	h.Write("/etc/sysctl.d/99-shigawire.conf", "net.ipv4.ip_forward=0\nvm.overcommit_memory = 1\n")
+	h.Write(builtin.DefaultSysctlFile, "net.ipv4.ip_forward=0\nvm.overcommit_memory = 1\n")
 	hosttest.Converge(t, build(t, env, "sysctl", map[string]any{"name": "net.ipv4.ip_forward", "value": "1"}), host.Changed)
-	if got := h.Read("/etc/sysctl.d/99-shigawire.conf"); got != "net.ipv4.ip_forward = 1\nvm.overcommit_memory = 1\n" || h.Sysctl["net.ipv4.ip_forward"] != "1" {
+	if got := h.Read(builtin.DefaultSysctlFile); got != "net.ipv4.ip_forward = 1\nvm.overcommit_memory = 1\n" || h.Sysctl["net.ipv4.ip_forward"] != "1" {
 		t.Fatalf("%q %v", got, h.Sysctl)
 	}
 	// The key alone is set: the drop-in's other keys are their own tasks'.
