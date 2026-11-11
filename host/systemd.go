@@ -11,6 +11,11 @@ import (
 // systemctlTimeout bounds one systemctl call (a unit's start included).
 const systemctlTimeout = 5 * time.Minute
 
+// ShowProps is one unit's properties as systemctl show prints them
+// (Key=Value lines), read as ReadKV reads a file: a value's surrounding
+// quotes are dropped.
+func ShowProps(out string) map[string]string { return parseKV([]byte(out)) }
+
 // Systemctl is systemctl with args, killed after systemctlTimeout.
 func Systemctl(args ...string) Cmd {
 	return Cmd{Name: "systemctl", Args: args, Timeout: systemctlTimeout}

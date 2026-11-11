@@ -201,8 +201,8 @@ func runCmds(ctx context.Context, x Exec, st State) (Result, error) {
 	return changed("%s", st.Drift)
 }
 
-// tail is the last n non-empty lines of out.
-func tail(out string, n int) []string {
+// Tail is the last n non-empty lines of out.
+func Tail(out string, n int) []string {
 	var lines []string
 	for _, l := range strings.Split(out, "\n") {
 		if l = strings.TrimRight(l, " \r\t"); strings.TrimSpace(l) != "" {
@@ -216,4 +216,4 @@ func tail(out string, n int) []string {
 }
 
 // LastLines is the last n non-empty lines of out, joined with " | ".
-func LastLines(out string, n int) string { return strings.Join(tail(out, n), " | ") }
+func LastLines(out string, n int) string { return strings.Join(Tail(out, n), " | ") }
