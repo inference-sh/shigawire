@@ -18,6 +18,9 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go vet ./...
+      # int is 32 bits there: a conversion that overflows only on 32-bit
+      # platforms fails to build or vet.
+      - run: GOARCH=386 go vet ./...
       - run: go test ./...
       - name: Static builds
         env:

@@ -29,6 +29,7 @@ test:
 
 vet:
 	go vet ./...
+	GOARCH=386 go vet ./...
 
 apicompat:
 	.github/scripts/apicompat.sh
