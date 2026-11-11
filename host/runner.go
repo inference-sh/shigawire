@@ -145,13 +145,13 @@ func (r *refusal) Unwrap() error { return r.err }
 // before it change (a playbook's fail task), so the play stops there. Plan
 // reports it Unknown like any failed Check, and Blocked; a caller can tell
 // it from a Check that failed because an earlier task has not run (an
-// owner a user task would create). It is a Finding too: Verify reports it
-// Failed. Refusal of nil is nil.
+// owner a user task would create). It wraps a Finding. Refusal of nil is
+// nil.
 func Refusal(err error) error {
 	if err == nil {
 		return nil
 	}
-	return &refusal{err}
+	return &refusal{Finding(err)}
 }
 
 // IsRefusal reports whether err is, or wraps, one Refusal marked.
@@ -169,8 +169,8 @@ func (f *finding) Unwrap() error { return f.err }
 // Finding marks err as what a Check found: it read the host, and the host
 // is wrong (an Assert's condition that does not hold). A Check's other
 // errors are that it could not read what it reads (a file's owner that
-// no user is yet). Verify reports a Finding, and a Refusal, Failed, and
-// any other failed Check Unknown. Run fails it like any error; Plan
+// no user is yet). Verify reports a Finding Failed, and any other failed
+// Check Unknown. Run fails it like any error; Plan
 // reports it Unknown, since a change planned before it may make it hold.
 // Finding of nil is nil.
 func Finding(err error) error {
@@ -180,11 +180,10 @@ func Finding(err error) error {
 	return &finding{err}
 }
 
-// IsFinding reports whether err is, or wraps, one Finding or Refusal
-// marked: a Check that ran and found the host wrong.
+// IsFinding reports whether err is, or wraps, one Finding marked.
 func IsFinding(err error) bool {
 	var f *finding
-	return errors.As(err, &f) || IsRefusal(err)
+	return errors.As(err, &f)
 }
 
 // Result is one task's outcome, for the report.
