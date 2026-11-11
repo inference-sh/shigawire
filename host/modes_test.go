@@ -60,14 +60,16 @@ func TestRunner_PlanChangesNothing(t *testing.T) {
 }
 
 // A plan's Unknown is Blocked when no change planned before it explains
-// it: before any change, or a Refusal anywhere. Run and Verify never set
-// it.
+// it: before any change, or a Refusal anywhere. A task that ignores errors
+// never blocks: Run goes on past it. Run and Verify never set it.
 func TestRunner_PlanBlocked(t *testing.T) {
 	p := Play{Tasks: []Task{
+		{Resource: &checkFails{errors.New("no user")}, IgnoreErrors: true},
 		{Resource: &checkFails{errors.New("no docker")}},
 		{Resource: &stub{id: "change"}},
 		{Name: "owner", Resource: &checkFails{errors.New("no user app")}},
 		{Name: "fail", Resource: &checkFails{Refusal(errors.New("DOMAIN is empty"))}},
+		{Name: "ignored", Resource: &checkFails{Refusal(errors.New("PORT is empty"))}, IgnoreErrors: true},
 	}}
 	got, err := runMode((*Runner).Plan, p)
 	if err != nil {
@@ -77,7 +79,7 @@ func TestRunner_PlanBlocked(t *testing.T) {
 	for _, r := range got {
 		blocked = append(blocked, r.Blocked)
 	}
-	if !slices.Equal(blocked, []bool{true, false, false, true}) {
+	if !slices.Equal(blocked, []bool{false, true, false, false, true, false}) {
 		t.Fatalf("blocked %v: %s", blocked, statuses(got))
 	}
 	got, _ = runMode((*Runner).Verify, p)
