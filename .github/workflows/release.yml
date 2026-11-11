@@ -1,7 +1,9 @@
 name: Release
 
 # Run it from the Actions tab (or `gh workflow run release.yml -f bump=minor`):
-# it tests dev, tags the next version, builds static shiga binaries and
+# it tests dev, checks the public API against the last release (an
+# incompatible change needs a major bump, or a minor one while v0), tags the
+# next version, builds static shiga binaries and
 # publishes them with checksums as a GitHub release. The tag also publishes
 # the Go module through proxy.golang.org.
 #
@@ -52,25 +54,40 @@ jobs:
         with:
           ref: ${{ github.event_name == 'push' && github.ref || 'dev' }}
           fetch-depth: 0
-      - name: Next version and tag
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Next version, API check and tag
         id: v
         env:
           EVENT: ${{ github.event_name }}
           BUMP: ${{ inputs.bump }}
         run: |
+          # LAST is the release before this one: the highest vX.Y.Z tag
+          # below a pushed tag, else the highest in the repo ("" before the
+          # first, which counts from v0.0.0).
+          TAGS=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V || true)
           if [ "$EVENT" = push ]; then
             VERSION="$GITHUB_REF_NAME"
+            LAST=$(printf '%s\n' $TAGS "$VERSION" | sort -uV | awk -v v="$VERSION" '$0 == v { print p; exit } { p = $0 }')
           else
-            # The highest vX.Y.Z tag in the repo; v0.0.0 before the first.
-            LAST=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
-            LAST=${LAST:-v0.0.0}
-            IFS=. read -r MA MI PA <<< "${LAST#v}"
+            LAST=$(printf '%s\n' $TAGS | tail -1)
+            IFS=. read -r MA MI PA <<< "${LAST:-v0.0.0}"
+            MA=${MA#v}
             case "$BUMP" in
               major) MA=$((MA+1)); MI=0; PA=0 ;;
               minor) MI=$((MI+1)); PA=0 ;;
               patch) PA=$((PA+1)) ;;
             esac
             VERSION="v$MA.$MI.$PA"
+          fi
+          # Before the tag is pushed (or, for a tag pushed by hand, before
+          # anything is published): an incompatible API change since LAST
+          # stops a bump too small for it.
+          if [ -n "$LAST" ]; then
+            API_BASE="$LAST" .github/scripts/apicompat.sh "$VERSION"
+          fi
+          if [ "$EVENT" != push ]; then
             git tag "$VERSION"
             git push origin "$VERSION"
           fi

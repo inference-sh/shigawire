@@ -27,6 +27,20 @@ jobs:
             GOOS=${t%/*} GOARCH=${t#*/} go build -o /dev/null ./...
           done
 
+  # The public API against the latest release: an incompatible change
+  # fails unless .github/api-next names a major release (a minor one while
+  # v0) for it. README "Building" has the rule.
+  api:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the release tags
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: .github/scripts/apicompat.sh
+
   trivy:
     runs-on: ubuntu-latest
     steps:

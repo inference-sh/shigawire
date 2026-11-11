@@ -3,6 +3,7 @@
 #   make            vet, test and build bin/shiga for this machine
 #   make dist       bin/shiga-linux-amd64 and bin/shiga-linux-arm64
 #   make VERSION=v0.1.0 dist
+#   make apicompat  the public API against the latest release (apidiff)
 #
 # VERSION defaults to `git describe`; shiga version prints it.
 
@@ -11,7 +12,7 @@ LDFLAGS := -s -w -X main.version=$(VERSION)
 GOBUILD := CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)'
 PLATFORMS := linux/amd64 linux/arm64
 
-.PHONY: all build dist test vet clean
+.PHONY: all build dist test vet apicompat clean
 
 all: vet test build
 
@@ -28,6 +29,9 @@ test:
 
 vet:
 	go vet ./...
+
+apicompat:
+	.github/scripts/apicompat.sh
 
 clean:
 	rm -rf bin
