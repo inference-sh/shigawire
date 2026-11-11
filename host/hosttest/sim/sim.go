@@ -31,6 +31,7 @@ import (
 
 	"github.com/inference-sh/shigawire/host"
 	"github.com/inference-sh/shigawire/host/hosttest"
+	"github.com/inference-sh/shigawire/host/internal/ufwrule"
 )
 
 // Unit is a systemd unit's state.
@@ -619,8 +620,7 @@ func (h *Host) ufw(a []string) host.Output {
 	}
 	switch {
 	case arg(a, 0) == "default" && len(a) == 3:
-		key := map[string]string{"incoming": "DEFAULT_INPUT_POLICY", "outgoing": "DEFAULT_OUTPUT_POLICY", "routed": "DEFAULT_FORWARD_POLICY"}[a[2]]
-		val := map[string]string{"allow": "ACCEPT", "deny": "DROP", "reject": "REJECT"}[a[1]]
+		key, val := ufwrule.DefaultKey(a[2]), ufwrule.PolicyValue(a[1])
 		if key == "" || val == "" {
 			return fail(1, "ERROR: Unsupported default policy")
 		}
@@ -656,18 +656,18 @@ func (h *Host) ufw(a []string) host.Output {
 			continue
 		}
 		lines := strings.Split(h.Read(ufwFiles[i]), "\n")
-		want := ufwTupleOf(t)
+		want := ufwrule.Parse(t)
 		at := slices.IndexFunc(lines, func(l string) bool {
 			got, ok := strings.CutPrefix(l, "### tuple ### ")
-			return ok && ufwTupleOf(got).key == want.key
+			return ok && ufwrule.Parse(got).Key == want.Key
 		})
-		var got ufwTuple
+		var got ufwrule.Tuple
 		if at >= 0 {
-			got = ufwTupleOf(strings.TrimPrefix(lines[at], "### tuple ### "))
+			got = ufwrule.Parse(strings.TrimPrefix(lines[at], "### tuple ### "))
 		}
 		line := "### tuple ### " + t
 		switch {
-		case del && at >= 0 && got.action == want.action && (want.comment == "" || got.comment == want.comment):
+		case del && at >= 0 && want.Deletes(got):
 			end := ufwRuleEnd(lines, at)
 			if end < len(lines) && lines[end] == "" {
 				end++
@@ -704,23 +704,6 @@ func ufwRuleEnd(lines []string, at int) int {
 		end++
 	}
 	return end
-}
-
-// ufwTuple is a "### tuple ###" line as ufw matches rules: the action;
-// all but the action and the comment, which ufw tells rules apart by;
-// the comment.
-type ufwTuple struct{ action, key, comment string }
-
-func ufwTupleOf(t string) ufwTuple {
-	f := strings.Fields(t)
-	if len(f) == 0 {
-		return ufwTuple{}
-	}
-	var c string
-	if last := f[len(f)-1]; strings.HasPrefix(last, "comment=") {
-		c, f = last, f[:len(f)-1]
-	}
-	return ufwTuple{f[0], strings.Join(f[1:], " "), c}
 }
 
 // parseUFWRule reads ufw's rule syntax as host.UFW writes it: ACTION
@@ -763,17 +746,7 @@ func parseUFWRule(a []string) (host.UFWRule, error) {
 
 // setKV sets KEY=value in a shell-style file under the root.
 func (h *Host) setKV(p, key, value string) {
-	lines := strings.Split(strings.TrimRight(h.Read(p), "\n"), "\n")
-	found := false
-	for i, l := range lines {
-		if strings.HasPrefix(l, key+"=") {
-			lines[i], found = key+"="+value, true
-		}
-	}
-	if !found {
-		lines = append(lines, key+"="+value)
-	}
-	h.Write(p, strings.Join(lines, "\n")+"\n")
+	h.Write(p, string(host.WithLine([]byte(h.Read(p)), key+"="+value, regexp.MustCompile("^"+regexp.QuoteMeta(key)+"="))))
 }
 
 func (h *Host) docker(a []string) (host.Output, bool) {

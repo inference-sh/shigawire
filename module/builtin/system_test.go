@@ -257,6 +257,11 @@ func TestHandlers(t *testing.T) {
 	if got := h.Exec.Calls(); !slices.Equal(got, []string{"visudo -c"}) {
 		t.Fatal(got)
 	}
+	// The reload is bounded as every systemctl call is: a hung reload
+	// does not hang the play.
+	if v := build(t, env, "validate_reload", map[string]any{"validate": "nginx -t", "service": "nginx"}).(*host.Validated); v.Then[0].Timeout == 0 {
+		t.Fatalf("reload with no timeout: %+v", v.Then[0])
+	}
 	refuse(t, env, "validate_reload", map[string]any{"validate": "nginx -t", "service": "nginx", "then": []any{"x"}}, "give one")
 	refuse(t, env, "validate_reload", map[string]any{"validate": "", "service": "nginx"}, "empty command")
 }

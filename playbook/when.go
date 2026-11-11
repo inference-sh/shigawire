@@ -1,7 +1,6 @@
 package playbook
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -254,26 +253,12 @@ func (f *factCache) get(ctx context.Context, name string) (string, error) {
 
 // readOSRelease reads ID and VERSION_ID from /etc/os-release.
 func (f *factCache) readOSRelease() error {
-	fh, err := os.Open(f.env.Path("/etc/os-release"))
+	kv, err := host.ReadKV(f.env.Path("/etc/os-release"))
 	if err != nil {
 		return fmt.Errorf("read /etc/os-release: %w", err)
 	}
-	defer fh.Close()
-	sc := bufio.NewScanner(fh)
-	for sc.Scan() {
-		k, v, ok := strings.Cut(strings.TrimSpace(sc.Text()), "=")
-		if !ok {
-			continue
-		}
-		v = unquote(v)
-		switch k {
-		case "ID":
-			f.values["os.id"] = v
-		case "VERSION_ID":
-			f.values["os.version_id"] = v
-		}
-	}
-	return sc.Err()
+	f.values["os.id"], f.values["os.version_id"] = kv["ID"], kv["VERSION_ID"]
+	return nil
 }
 
 // readArch reads the machine with uname -m, named as Go names it (amd64,

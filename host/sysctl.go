@@ -1,13 +1,10 @@
 package host
 
 import (
-	"cmp"
 	"context"
 	"fmt"
-	"path/filepath"
 	"regexp"
 	"strings"
-	"time"
 )
 
 // Sysctl is a kernel parameter set in a sysctl.d drop-in and in the
@@ -30,7 +27,7 @@ func (s *Sysctl) ID() string { return "sysctl " + s.Key + " = " + s.Value }
 
 func (s *Sysctl) line() *Line {
 	return &Line{
-		Path:    filepath.Join(cmp.Or(s.Root, "/"), s.Path),
+		Path:    UnderRoot(s.Root, s.Path),
 		Line:    s.Key + " = " + s.Value,
 		Replace: regexp.MustCompile(`^\s*-?` + regexp.QuoteMeta(s.Key) + `\s*=`),
 	}
@@ -42,7 +39,7 @@ func oneSpaced(v string) string { return strings.Join(strings.Fields(v), " ") }
 
 // live is the kernel's value of the key.
 func (s *Sysctl) live(ctx context.Context) (string, error) {
-	o, err := run(ctx, s.Exec, Cmd{Name: "sysctl", Args: []string{"-n", s.Key}, Timeout: time.Minute})
+	o, err := run(ctx, s.Exec, short("sysctl", "-n", s.Key))
 	if err != nil {
 		return "", err
 	}
@@ -88,7 +85,7 @@ func (s *Sysctl) Apply(ctx context.Context, st State) (Result, error) {
 			return Result{}, err
 		}
 	}
-	if _, err := run(ctx, s.Exec, Cmd{Name: "sysctl", Args: []string{"-p", s.Path}, Timeout: time.Minute}); err != nil {
+	if _, err := run(ctx, s.Exec, short("sysctl", "-p", s.Path)); err != nil {
 		return Result{}, err
 	}
 	got, err := s.live(ctx)

@@ -162,8 +162,8 @@ func newGroup(env module.Env, a groupArgs) (host.Resource, error) {
 	return &host.Group{Exec: env.Exec, Name: a.Name, GID: a.GID, System: a.System, Absent: state == "absent"}, nil
 }
 
-// DefaultSysctlFile is sysctl's drop-in when a task names none.
-const DefaultSysctlFile = "/etc/sysctl.d/99-shigawire.conf"
+// defaultSysctlFile is sysctl's drop-in when a task names none.
+const defaultSysctlFile = "/etc/sysctl.d/99-shigawire.conf"
 
 var sysctlKey = regexp.MustCompile(`^[a-z0-9_]+([./][A-Za-z0-9_*-]+)+$`)
 
@@ -188,7 +188,7 @@ func newSysctl(env module.Env, a sysctlArgs) (host.Resource, error) {
 	}
 	file := a.File
 	if file == "" {
-		file = DefaultSysctlFile
+		file = defaultSysctlFile
 	}
 	if err := absPath("file", file); err != nil {
 		return nil, err
@@ -246,7 +246,7 @@ func newValidateReload(env module.Env, a validateReloadArgs) (host.Resource, err
 		if err := checkUnit(a.Service); err != nil {
 			return nil, fmt.Errorf("service: %w", err)
 		}
-		out.Then = []host.Cmd{{Name: "systemctl", Args: []string{"reload", a.Service}}}
+		out.Then = []host.Cmd{host.Systemctl("reload", a.Service)}
 		out.Name = "validate and reload " + a.Service
 	case len(a.Then) > 0:
 		for i, c := range a.Then {

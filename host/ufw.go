@@ -1,22 +1,20 @@
 package host
 
 import (
-	"bufio"
-	"bytes"
 	"cmp"
 	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"net/netip"
 	"os"
-	"path/filepath"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
-	"time"
+
+	"github.com/inference-sh/shigawire/host/internal/ufwrule"
 )
 
 // UFW is the ufw firewall's default policies, its rules, and whether it
@@ -73,14 +71,6 @@ type UFWRule struct {
 	Absent bool
 }
 
-var ufwPolicy = map[string]string{"allow": "ACCEPT", "deny": "DROP", "reject": "REJECT"}
-
-var ufwDirection = map[string]string{
-	"incoming": "DEFAULT_INPUT_POLICY",
-	"outgoing": "DEFAULT_OUTPUT_POLICY",
-	"routed":   "DEFAULT_FORWARD_POLICY",
-}
-
 var (
 	ufwPort  = regexp.MustCompile(`^[0-9]+(:[0-9]+)?(,[0-9]+(:[0-9]+)?)*$`)
 	ufwIface = regexp.MustCompile(`^[A-Za-z0-9_.+-]+$`)
@@ -88,15 +78,15 @@ var (
 
 func (u *UFW) ID() string { return "ufw" }
 
-func (u *UFW) path(p string) string { return filepath.Join(cmp.Or(u.Root, "/"), p) }
+func (u *UFW) path(p string) string { return UnderRoot(u.Root, p) }
 
 // Validate reports the first default or rule ufw would not take.
 func (u *UFW) Validate() error {
 	for d, p := range u.Defaults {
-		if ufwDirection[d] == "" {
+		if ufwrule.DefaultKey(d) == "" {
 			return fmt.Errorf("ufw default %q: want incoming, outgoing or routed", d)
 		}
-		if ufwPolicy[p] == "" {
+		if ufwrule.PolicyValue(p) == "" {
 			return fmt.Errorf("ufw default %s %q: want allow, deny or reject", d, p)
 		}
 	}
@@ -106,7 +96,7 @@ func (u *UFW) Validate() error {
 		if err != nil {
 			return fmt.Errorf("ufw rule %d: %w", i+1, err)
 		}
-		k := parseTuple(cmp.Or(v4, v6)).key
+		k := ufwrule.Parse(cmp.Or(v4, v6)).Key
 		if j, ok := keys[k]; ok {
 			return fmt.Errorf("ufw rules %d and %d are one rule to ufw (they differ only in action or comment)", j+1, i+1)
 		}
@@ -115,43 +105,14 @@ func (u *UFW) Validate() error {
 	return nil
 }
 
-// ufwTuple is a "### tuple ###" line in three: the action, what tells the
-// rule from others to ufw (all of it but the action and the comment), and
-// the comment ("" or comment=HEX).
-type ufwTuple struct{ action, key, comment string }
-
-func parseTuple(t string) ufwTuple {
-	f := strings.Fields(t)
-	if len(f) == 0 {
-		return ufwTuple{}
-	}
-	var c string
-	if last := f[len(f)-1]; strings.HasPrefix(last, "comment=") {
-		c, f = last, f[:len(f)-1]
-	}
-	return ufwTuple{action: f[0], key: strings.Join(f[1:], " "), comment: c}
-}
-
-// commentText is a tuple's comment as written: none, or quoted.
-func (t ufwTuple) commentText() string {
-	h, ok := strings.CutPrefix(t.comment, "comment=")
-	if !ok {
-		return "none"
-	}
-	if b, err := hex.DecodeString(h); err == nil {
-		return strconv.Quote(string(b))
-	}
-	return h
-}
-
 // ufwFind is the tuple in tuples that is want's rule to ufw, if any.
-func ufwFind(tuples []string, want ufwTuple) (ufwTuple, bool) {
+func ufwFind(tuples []string, want ufwrule.Tuple) (ufwrule.Tuple, bool) {
 	for _, t := range tuples {
-		if got := parseTuple(t); got.key == want.key {
+		if got := ufwrule.Parse(t); got.Key == want.Key {
 			return got, true
 		}
 	}
-	return ufwTuple{}, false
+	return ufwrule.Tuple{}, false
 }
 
 // ufwAddr is an address or network as ufw writes it, and whether it is
@@ -259,26 +220,6 @@ func (r UFWRule) args() []string {
 	return a
 }
 
-// readKV reads a shell-style KEY=value file (quotes dropped).
-func readKV(path string) (map[string]string, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	kv := map[string]string{}
-	sc := bufio.NewScanner(bytes.NewReader(b))
-	for sc.Scan() {
-		l := strings.TrimSpace(sc.Text())
-		if l == "" || strings.HasPrefix(l, "#") {
-			continue
-		}
-		if k, v, ok := strings.Cut(l, "="); ok {
-			kv[strings.TrimSpace(k)] = strings.Trim(strings.TrimSpace(v), `"'`)
-		}
-	}
-	return kv, sc.Err()
-}
-
 // readTuples is the "### tuple ###" lines of a ufw rules file, the prefix
 // cut; a missing file has none.
 func readTuples(path string) ([]string, error) {
@@ -305,9 +246,9 @@ func ufwDeletes(tuples []string, want string) bool {
 	if want == "" {
 		return false
 	}
-	w := parseTuple(want)
+	w := ufwrule.Parse(want)
 	got, ok := ufwFind(tuples, w)
-	return ok && got.action == w.action && (w.comment == "" || got.comment == w.comment)
+	return ok && w.Deletes(got)
 }
 
 func appendNew(s []string, v string) []string {
@@ -317,39 +258,22 @@ func appendNew(s []string, v string) []string {
 	return append(s, v)
 }
 
-func ufwCmd(args ...string) Cmd {
-	return Cmd{Name: "ufw", Args: args, Timeout: time.Minute}
-}
-
-// ufwTodo is what UFW.Check found to do: ufw's commands, and what each
-// does.
-type ufwTodo struct {
-	cmds  []Cmd
-	drift []string
-}
-
-func (u *UFW) todo() (*ufwTodo, error) {
+func (u *UFW) todo() (*cmdPlan, error) {
 	if err := u.Validate(); err != nil {
 		return nil, err
 	}
-	defaults, err := readKV(u.path("/etc/default/ufw"))
+	defaults, err := ReadKV(u.path("/etc/default/ufw"))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, errors.New("there is no /etc/default/ufw: ufw is not installed")
 	}
 	if err != nil {
 		return nil, err
 	}
-	t := &ufwTodo{}
-	dirs := make([]string, 0, len(u.Defaults))
-	for d := range u.Defaults {
-		dirs = append(dirs, d)
-	}
-	slices.Sort(dirs)
-	for _, d := range dirs {
+	t := &cmdPlan{}
+	for _, d := range slices.Sorted(maps.Keys(u.Defaults)) {
 		p := u.Defaults[d]
-		if got := defaults[ufwDirection[d]]; got != ufwPolicy[p] {
-			t.cmds = append(t.cmds, ufwCmd("default", p, d))
-			t.drift = append(t.drift, fmt.Sprintf("default %s %s (has %s)", d, p, cmp.Or(got, "none")))
+		if got := defaults[ufwrule.DefaultKey(d)]; got != ufwrule.PolicyValue(p) {
+			t.add(short("ufw", "default", p, d), fmt.Sprintf("default %s %s (has %s)", d, p, cmp.Or(got, "none")))
 		}
 	}
 	ipv6 := defaults["IPV6"] == "yes"
@@ -366,8 +290,7 @@ func (u *UFW) todo() (*ufwTodo, error) {
 		desc := strings.Join(r.args(), " ")
 		if r.Absent {
 			if ufwDeletes(v4, t4) || ufwDeletes(v6, t6) {
-				t.cmds = append(t.cmds, ufwCmd(append([]string{"delete"}, r.args()...)...))
-				t.drift = append(t.drift, "delete "+desc)
+				t.add(short("ufw", append([]string{"delete"}, r.args()...)...), "delete "+desc)
 			}
 			continue
 		}
@@ -379,37 +302,34 @@ func (u *UFW) todo() (*ufwTodo, error) {
 			if f.want == "" {
 				continue
 			}
-			want := parseTuple(f.want)
+			want := ufwrule.Parse(f.want)
 			got, ok := ufwFind(f.has, want)
 			if !ok {
 				missing = true
 				continue
 			}
-			if got.action != want.action {
-				changes = appendNew(changes, got.action+" -> "+want.action)
+			if got.Action != want.Action {
+				changes = appendNew(changes, got.Action+" -> "+want.Action)
 			}
-			if got.comment != want.comment {
-				changes = appendNew(changes, "comment "+got.commentText()+" -> "+want.commentText())
+			if got.Comment != want.Comment {
+				changes = appendNew(changes, "comment "+got.CommentText()+" -> "+want.CommentText())
 			}
 		}
-		switch {
-		case len(changes) > 0:
-			// ufw updates the rule in place, and adds it where missing.
-			t.cmds = append(t.cmds, ufwCmd(r.args()...))
-			t.drift = append(t.drift, desc+" ("+strings.Join(changes, ", ")+")")
-		case missing:
-			t.cmds = append(t.cmds, ufwCmd(r.args()...))
-			t.drift = append(t.drift, desc)
+		// ufw updates the rule in place, and adds it where missing.
+		if len(changes) > 0 {
+			desc += " (" + strings.Join(changes, ", ") + ")"
+		}
+		if missing || len(changes) > 0 {
+			t.add(short("ufw", r.args()...), desc)
 		}
 	}
 	if u.Enabled {
-		conf, err := readKV(u.path("/etc/ufw/ufw.conf"))
+		conf, err := ReadKV(u.path("/etc/ufw/ufw.conf"))
 		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return nil, err
 		}
 		if conf["ENABLED"] != "yes" {
-			t.cmds = append(t.cmds, ufwCmd("--force", "enable"))
-			t.drift = append(t.drift, "enable")
+			t.add(short("ufw", "--force", "enable"), "enable")
 		}
 	}
 	return t, nil
@@ -418,20 +338,16 @@ func (u *UFW) todo() (*ufwTodo, error) {
 // Check's Data is the ufw commands to run.
 func (u *UFW) Check(context.Context) (State, error) {
 	t, err := u.todo()
-	switch {
-	case err != nil:
+	if err != nil {
 		return State{}, err
-	case len(t.cmds) == 0:
-		return inPlace()
 	}
-	return driftData(t.cmds, "%s", strings.Join(t.drift, "; "))
+	return t.state()
 }
 
 func (u *UFW) Apply(ctx context.Context, st State) (Result, error) {
-	for _, c := range st.Data.([]Cmd) {
-		if _, err := run(ctx, u.Exec, c); err != nil {
-			return Result{}, err
-		}
+	res, err := runCmds(ctx, u.Exec, st)
+	if err != nil {
+		return Result{}, err
 	}
 	t, err := u.todo()
 	if err != nil {
@@ -440,5 +356,5 @@ func (u *UFW) Apply(ctx context.Context, st State) (Result, error) {
 	if len(t.drift) > 0 {
 		return Result{}, fmt.Errorf("ufw ran, and its files still differ: %s", strings.Join(t.drift, "; "))
 	}
-	return changed("%s", st.Drift)
+	return res, nil
 }

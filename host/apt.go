@@ -64,21 +64,14 @@ func (p pkgState) rank() int {
 	return 0
 }
 
-// NoninteractiveEnv keeps apt, dpkg, debconf and needrestart from asking
+// noninteractiveEnv keeps apt, dpkg, debconf and needrestart from asking
 // anything, and their messages in English: what installers that run apt
 // need too.
-func NoninteractiveEnv() []string {
+func noninteractiveEnv() []string {
 	return []string{"DEBIAN_FRONTEND=noninteractive", "NEEDRESTART_MODE=a", "LC_ALL=C.UTF-8", "LANG=C.UTF-8"}
 }
 
-func (a *Apt) path(p string) string { return filepath.Join(a.root(), p) }
-
-func (a *Apt) root() string {
-	if a.Root == "" {
-		return "/"
-	}
-	return a.Root
-}
+func (a *Apt) path(p string) string { return UnderRoot(a.Root, p) }
 
 // lockTimeout is how long apt waits for another apt to finish (a test
 // shortens it).
@@ -109,7 +102,7 @@ func (a *Apt) get(ctx context.Context, timeout time.Duration, args ...string) (O
 	base := []string{"-y", "-q",
 		"-o", "DPkg::Lock::Timeout=" + strconv.Itoa(int(lock.Seconds())),
 		"-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold"}
-	cmd := Cmd{Name: "apt-get", Args: append(base, args...), Env: NoninteractiveEnv(), Timeout: timeout + lock}
+	cmd := Cmd{Name: "apt-get", Args: append(base, args...), Env: noninteractiveEnv(), Timeout: timeout + lock}
 	deadline := time.Now().Add(lock)
 	finished := false
 	for delay := time.Second; ; delay = min(2*delay, 30*time.Second) {
@@ -120,7 +113,7 @@ func (a *Apt) get(ctx context.Context, timeout time.Duration, args ...string) (O
 		case !finished && strings.Contains(o.Out, "dpkg was interrupted"):
 			finished = true
 			if _, err := run(ctx, a.Exec, Cmd{Name: "dpkg", Args: []string{"--configure", "-a", "--force-confdef", "--force-confold"},
-				Env: NoninteractiveEnv(), Timeout: timeout}); err != nil {
+				Env: noninteractiveEnv(), Timeout: timeout}); err != nil {
 				return o, fmt.Errorf("dpkg was interrupted, and finishing it failed: %w", err)
 			}
 			continue
@@ -143,7 +136,7 @@ func (a *Apt) read(ctx context.Context) (map[string]pkgState, error) {
 	if a.pkgs != nil {
 		return a.pkgs, nil
 	}
-	o, err := run(ctx, a.Exec, Cmd{Name: "dpkg-query", Args: []string{"-W", "-f", `${Package}\t${db:Status-Abbrev}\t${Version}\n`}, Timeout: time.Minute})
+	o, err := run(ctx, a.Exec, short("dpkg-query", "-W", "-f", `${Package}\t${db:Status-Abbrev}\t${Version}\n`))
 	if err != nil {
 		return nil, fmt.Errorf("installed packages: %w", err)
 	}
@@ -490,7 +483,7 @@ func (r *aptRepo) fetchKey(ctx context.Context) ([]byte, error) {
 	if r.r.Key != nil {
 		return r.r.Key, nil
 	}
-	key, err := Fetch(ctx, &http.Client{Timeout: time.Minute}, r.r.KeyURL, 1<<20)
+	key, err := fetch(ctx, &http.Client{Timeout: time.Minute}, r.r.KeyURL, 1<<20)
 	if err != nil {
 		return nil, fmt.Errorf("the key for %s: %w", r.r.Name, err)
 	}

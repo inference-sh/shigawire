@@ -2,6 +2,7 @@ package host
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -12,6 +13,36 @@ import (
 	"path/filepath"
 	"strings"
 )
+
+// UnderRoot is the host path p under root, the directory the host's
+// files are in as this process sees them; "" is /, the host itself.
+func UnderRoot(root, p string) string { return filepath.Join(cmp.Or(root, "/"), p) }
+
+// ReadKV reads a shell-style KEY=value file (/etc/os-release,
+// /etc/default/ufw): parseKV of its content.
+func ReadKV(path string) (map[string]string, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return parseKV(b), nil
+}
+
+// parseKV reads KEY=value lines, each value's surrounding quotes dropped;
+// a blank line or a # comment is skipped.
+func parseKV(b []byte) map[string]string {
+	kv := map[string]string{}
+	for _, l := range strings.Split(string(b), "\n") {
+		l = strings.TrimSpace(l)
+		if l == "" || strings.HasPrefix(l, "#") {
+			continue
+		}
+		if k, v, ok := strings.Cut(l, "="); ok {
+			kv[strings.TrimSpace(k)] = strings.Trim(strings.TrimSpace(v), `"'`)
+		}
+	}
+	return kv
+}
 
 // File is a regular file with its content, mode and owner. A file that
 // differs is replaced atomically (written beside it, renamed over it), so
@@ -80,7 +111,7 @@ func (f *File) sameContent(fi fs.FileInfo) (bool, error) {
 		return true, nil
 	}
 	if f.From != "" {
-		return SameContent(f.From, f.Path)
+		return sameFiles(f.From, f.Path)
 	}
 	if fi.Size() != int64(len(f.Content)) {
 		return false, nil
@@ -320,9 +351,9 @@ func writeAtomic(path string, r io.Reader, mode fs.FileMode, owner *Owner) error
 	return nil
 }
 
-// SameContent reports whether the files at a and b hold the same bytes:
+// sameFiles reports whether the files at a and b hold the same bytes:
 // sizes first, then hashes.
-func SameContent(a, b string) (bool, error) {
+func sameFiles(a, b string) (bool, error) {
 	sa, err := os.Stat(a)
 	if err != nil {
 		return false, err
