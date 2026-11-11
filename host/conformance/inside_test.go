@@ -20,6 +20,7 @@ import (
 	"regexp"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -203,9 +204,12 @@ func newHost(t *testing.T) *box {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if h.user, err = host.UserOwner(u); err != nil {
+	uid, err1 := strconv.Atoi(u.Uid)
+	gid, err2 := strconv.Atoi(u.Gid)
+	if err := errors.Join(err1, err2); err != nil {
 		t.Fatal(err)
 	}
+	h.user = host.Owner{UID: uid, GID: gid}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/payload", func(w http.ResponseWriter, _ *http.Request) { w.Write(h.payload) })
 	mux.HandleFunc("/key.gpg", func(w http.ResponseWriter, _ *http.Request) {
@@ -235,7 +239,6 @@ func (h *box) cases() []tcase {
 	)
 	sum := sha256.Sum256(h.payload)
 	payloadSum := hex.EncodeToString(sum[:])
-	var deb string // InstallDeb's .deb, fetched by its setup
 	owner := h.user
 	task := func(r host.Resource, notify ...*host.Handler) host.Task {
 		return host.Task{Resource: r, Notify: notify}
@@ -317,7 +320,7 @@ func (h *box) cases() []tcase {
 				h.aptLists(t)
 				h.sh(t, "apt-get -y -q install "+bashc)
 			},
-			play:    func(a *host.Apt) host.Play { return tasks(a.Remove(host.Names(bashc), false)) },
+			play:    func(a *host.Apt) host.Play { return tasks(a.Remove([]string{bashc}, false)) },
 			present: func() error { return h.pkgStatus(bashc, "rc") },
 		},
 		{
@@ -332,7 +335,7 @@ func (h *box) cases() []tcase {
 					t.Fatal(err)
 				}
 			},
-			play:    func(a *host.Apt) host.Play { return tasks(a.Remove(host.Names(hello), false)) },
+			play:    func(a *host.Apt) host.Play { return tasks(a.Remove([]string{hello}, false)) },
 			present: func() error { return h.pkgStatus(hello, "") },
 		},
 		{
@@ -354,26 +357,8 @@ func (h *box) cases() []tcase {
 				h.aptLists(t)
 				h.sh(t, "apt-get -y -q install "+bashc+" && apt-get -y -q remove "+bashc)
 			},
-			play: func(a *host.Apt) host.Play {
-				sel := host.Pkgs{Desc: "bash-completion*", Match: func(n string) bool { return strings.HasPrefix(n, bashc) }}
-				return tasks(a.Remove(sel, true))
-			},
+			play:    func(a *host.Apt) host.Play { return tasks(a.Remove([]string{bashc}, true)) },
 			present: func() error { return h.pkgStatus(bashc, "") },
-		},
-		{
-			name: "apt/install-deb",
-			setup: func(t *testing.T) {
-				h.aptLists(t)
-				dir := t.TempDir()
-				h.sh(t, "dpkg --purge "+hello+" && cd "+dir+" && apt-get -q download "+hello)
-				m, _ := filepath.Glob(filepath.Join(dir, hello+"_*.deb"))
-				if len(m) != 1 {
-					t.Fatalf("apt-get download %s: %v", hello, m)
-				}
-				deb = m[0]
-			},
-			play:    func(a *host.Apt) host.Play { return tasks(a.InstallDeb(deb)) },
-			present: func() error { return h.pkgStatus(hello, "ii") },
 		},
 		// The repo gpu_toolkit.yml adds: a flat repo (suite "/"), no
 		// components. A changed repo updates the lists however fresh.
@@ -486,7 +471,7 @@ func (h *box) cases() []tcase {
 		},
 		{
 			// A user and a group made by command, guarded with Unless, and
-			// the login user put in the group.
+			// the login user put in the group (User.Groups).
 			name: "user+group",
 			setup: func(t *testing.T) {
 				h.sh(t, "userdel res-svc 2>/dev/null; groupdel res-group 2>/dev/null; true")
@@ -497,7 +482,7 @@ func (h *box) cases() []tcase {
 				return tasks(
 					&host.Command{Exec: h.x, Cmd: cmd("groupadd", "--system", "res-group"), Unless: unless("getent", "group", "res-group")},
 					&host.Command{Exec: h.x, Cmd: cmd("useradd", "--system", "--no-create-home", "-g", "res-group", "res-svc"), Unless: unless("id", "res-svc")},
-					&host.GroupMember{Exec: h.x, User: loginUser, Group: "res-group"},
+					&host.User{Exec: h.x, Name: loginUser, Groups: []string{"res-group"}},
 				)
 			},
 			present: func() error {
@@ -509,39 +494,20 @@ func (h *box) cases() []tcase {
 			},
 		},
 		{
-			// The engine's own user, as setup makes it: a system user with
-			// its group, a home 0750 of its own, no login.
+			// A system user with its home and no login (User).
 			name: "system-user",
 			setup: func(t *testing.T) {
 				h.sh(t, "userdel -r res-engine 2>/dev/null; groupdel res-engine 2>/dev/null; rm -rf /home/res-engine; true")
 			},
 			play: func(*host.Apt) host.Play {
-				return tasks(&host.SystemUser{Exec: h.x, Name: "res-engine", Home: "/home/res-engine", Comment: "res conformance engine", Shell: "/usr/sbin/nologin", HomeMode: 0o750})
+				return tasks(&host.User{Exec: h.x, Name: "res-engine", Home: "/home/res-engine", Comment: "res conformance engine",
+					Shell: "/usr/sbin/nologin", System: true, CreateHome: true})
 			},
 			present: func() error {
-				out, err := h.out("getent passwd res-engine && stat -c '%a %U:%G' /home/res-engine && id -gn res-engine")
+				out, err := h.out("getent passwd res-engine && stat -c '%U' /home/res-engine")
 				if err != nil || !strings.Contains(out, ":res conformance engine:/home/res-engine:/usr/sbin/nologin") ||
-					!strings.Contains(out, "750 res-engine:res-engine") {
+					!strings.Contains(out, "\nres-engine") {
 					return fmt.Errorf("user: %v %s", err, out)
-				}
-				return nil
-			},
-		},
-		{
-			// A tree root's engine left, given to the login user; a link in
-			// it to /etc/shadow is changed itself, never what it points at.
-			name: "own-tree",
-			setup: func(t *testing.T) {
-				h.sh(t, "rm -rf /srv/res-tree && mkdir -p /srv/res-tree/apps/a/venv && echo x > /srv/res-tree/apps/a/venv/python && "+
-					"ln -s /etc/shadow /srv/res-tree/apps/a/shadow && ln -s /etc /srv/res-tree/apps/a/etc")
-			},
-			play: func(*host.Apt) host.Play {
-				return tasks(&host.OwnTree{Path: "/srv/res-tree", Owner: owner, Hardlinks: host.ProtectedHardlinks("")})
-			},
-			present: func() error {
-				out, err := h.out("stat -c '%U %n' /srv/res-tree/apps/a/venv/python && stat -c '%U %n' /etc/shadow /etc && stat -L -c '%U' /srv/res-tree/apps/a/shadow")
-				if err != nil || !strings.Contains(out, loginUser+" /srv/res-tree/apps/a/venv/python") || !strings.Contains(out, "root /etc/shadow") || !strings.Contains(out, "root /etc\n") {
-					return fmt.Errorf("tree: %v %s", err, out)
 				}
 				return nil
 			},

@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"os/user"
-	"strconv"
 )
 
 // Owner is a file's numeric owner and group.
@@ -15,19 +13,6 @@ type Owner struct {
 }
 
 func (o Owner) String() string { return fmt.Sprintf("%d:%d", o.UID, o.GID) }
-
-// UserOwner is u and u's primary group.
-func UserOwner(u *user.User) (Owner, error) {
-	uid, err := strconv.Atoi(u.Uid)
-	if err != nil {
-		return Owner{}, fmt.Errorf("user %s: uid %q", u.Username, u.Uid)
-	}
-	gid, err := strconv.Atoi(u.Gid)
-	if err != nil {
-		return Owner{}, fmt.Errorf("user %s: gid %q", u.Username, u.Gid)
-	}
-	return Owner{UID: uid, GID: gid}, nil
-}
 
 // attrs are a path's mode and owner as a resource wants them, by one rule
 // for every resource: mode 0 leaves an existing path's (a new one gets its
