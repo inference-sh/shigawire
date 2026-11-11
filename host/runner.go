@@ -80,13 +80,15 @@ const (
 	// the host wrong (IsFinding), and Verify reads on; Plan never reports
 	// it.
 	Failed
-	// Ignored: failed, and the play went on (Task.IgnoreErrors).
+	// Ignored: failed, and the play went on (Task.IgnoreErrors). In Plan
+	// or Verify, a Check that failed in such a task.
 	Ignored
 	// Warn: Check or Apply returned a Warning; the play went on.
 	Warn
 	// Unknown: in Plan or Verify, Check failed, so whether the resource
 	// is in place is not known (it may read what an earlier task would put
-	// there). In Verify, not a Finding: that is Failed.
+	// there). In Verify, not a Finding: that is Failed. Not in a task that
+	// ignores errors: that is Ignored.
 	Unknown
 	// Skipped: the task does not apply here (State.Skipped); nothing was
 	// done.
@@ -197,8 +199,7 @@ type Result struct {
 	Action bool
 	// Blocked: in Plan, an Unknown no change planned before it can
 	// explain, so Run would fail there too: a Refusal, or a Check that
-	// failed with no change planned before it, in a task that does not
-	// ignore errors. Another Unknown may read
+	// failed with no change planned before it. Another Unknown may read
 	// what an earlier change would put in place (an owner a user task
 	// creates).
 	Blocked bool
@@ -273,16 +274,18 @@ func (r *Runner) Run(ctx context.Context, p Play) error { return r.run(ctx, p, m
 // drift (an action: Result.Action, "run" when it says nothing more), and
 // the handlers it notifies are planned in turn, as Run would run them. A
 // Check that fails is Unknown (Result.Blocked when no earlier change can
-// explain it), notifies nothing, and the plan goes on. The error is only
-// for a play that cannot run, or ctx ending.
+// explain it; Ignored in a task that ignores errors), notifies nothing,
+// and the plan goes on. The error is only for a play that cannot run, or
+// ctx ending.
 func (r *Runner) Plan(ctx context.Context, p Play) error { return r.run(ctx, p, modePlan) }
 
 // Verify runs every task's Check and no Apply, and runs no handler: it
 // reports drift. A task not in place is reported Changed with its drift;
 // an action is reported OK (Result.Action) and not run; a Check that found
 // the host wrong (IsFinding: an assert that does not hold) is Failed, and
-// any other Check that fails is Unknown. Verify reads every task, and
-// returns an error when any was Changed, Failed or Unknown.
+// any other Check that fails is Unknown; either is Ignored in a task that
+// ignores errors. Verify reads every task, and returns an error when any
+// was Changed, Failed or Unknown.
 func (r *Runner) Verify(ctx context.Context, p Play) error { return r.run(ctx, p, modeVerify) }
 
 func (p Play) validate() error {
@@ -367,20 +370,14 @@ func (r *Runner) run(ctx context.Context, p Play, m mode) error {
 			}
 			continue
 		}
-		res := pr.one(ctx, t.name(), t.Resource)
-		if res.Status == Failed && t.IgnoreErrors {
-			res.Status = Ignored
+		res := pr.report(pr.one(ctx, t))
+		if m == modeVerify {
+			continue
 		}
-		switch pr.report(res, t.IgnoreErrors).Status {
+		switch res.Status {
 		case Failed:
-			if m == modeVerify {
-				continue
-			}
 			return errors.Join(fmt.Errorf("%s: %w", res.Name, res.Err), pr.flush(ctx))
 		case Changed:
-			if m == modeVerify {
-				continue
-			}
 			for _, h := range t.Notify {
 				if !slices.Contains(pr.notified, h) {
 					pr.notified = append(pr.notified, h)
@@ -395,12 +392,8 @@ func (r *Runner) run(ctx context.Context, p Play, m mode) error {
 	return err
 }
 
-// report counts res and hands it to OnResult. ignoreErrors: Run goes on
-// past res's failure, so a plan's Unknown there blocks nothing.
-func (pr *playRun) report(res Result, ignoreErrors bool) Result {
-	if pr.mode == modePlan && res.Status == Unknown && !ignoreErrors && (IsRefusal(res.Err) || !pr.changed) {
-		res.Blocked = true
-	}
+// report counts res and hands it to OnResult.
+func (pr *playRun) report(res Result) Result {
 	if res.Status == Changed {
 		pr.changed = true
 	}
@@ -449,10 +442,10 @@ func (pr *playRun) flush(ctx context.Context) error {
 			res = Result{Name: name, Status: Failed, Err: fmt.Errorf("not run: handler %q failed", h.Needs[i].name())}
 			res.Msg = res.Err.Error()
 		} else {
-			res = pr.one(ctx, name, h.Resource)
+			res = pr.one(ctx, Task{Name: name, Resource: h.Resource})
 		}
 		res.Handler = true
-		if pr.report(res, false).Status == Failed {
+		if pr.report(res).Status == Failed {
 			pr.failed[h] = true
 			errs = append(errs, fmt.Errorf("handler %q: %w", name, res.Err))
 		}
@@ -463,24 +456,13 @@ func (pr *playRun) flush(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// one checks rc and, in Run, applies it, with what the check found, when
-// it is not in place.
-func (pr *playRun) one(ctx context.Context, name string, rc Resource) Result {
-	res := Result{Name: name}
-	fail := func(err error) Result {
-		res.Err, res.Msg = err, err.Error()
-		switch {
-		case IsWarning(err):
-			res.Status = Warn
-		case pr.mode == modeVerify && IsFinding(err):
-			res.Status = Failed
-		case pr.mode != modeApply:
-			res.Status = Unknown
-		default:
-			res.Status = Failed
-		}
-		return res
-	}
+// one checks t's resource and, in Run, applies it, with what the check
+// found, when it is not in place. A handler is a Task with no
+// IgnoreErrors.
+func (pr *playRun) one(ctx context.Context, t Task) Result {
+	rc := t.Resource
+	res := Result{Name: t.name()}
+	fail := func(err error) Result { return pr.classify(res, err, t.IgnoreErrors) }
 	st, err := rc.Check(ctx)
 	if err != nil {
 		return fail(err)
@@ -510,6 +492,28 @@ func (pr *playRun) one(ctx context.Context, name string, rc Resource) Result {
 		return fail(err)
 	}
 	res.Status, res.Msg = got.Status, cmp.Or(got.Msg, st.Drift)
+	return res
+}
+
+// classify is res with the error its Check or Apply returned, in a task
+// that ignores errors or not: its Status, and in Plan whether it is
+// Blocked. It is the only reader of the error's marks (Warning, Finding,
+// Refusal) and of Task.IgnoreErrors.
+func (pr *playRun) classify(res Result, err error, ignoreErrors bool) Result {
+	res.Err, res.Msg = err, err.Error()
+	switch {
+	case IsWarning(err):
+		res.Status = Warn
+	case ignoreErrors:
+		res.Status = Ignored
+	case pr.mode == modeVerify && IsFinding(err):
+		res.Status = Failed
+	case pr.mode != modeApply:
+		res.Status = Unknown
+		res.Blocked = pr.mode == modePlan && (IsRefusal(err) || !pr.changed)
+	default:
+		res.Status = Failed
+	}
 	return res
 }
 

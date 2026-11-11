@@ -61,7 +61,8 @@ func TestRunner_PlanChangesNothing(t *testing.T) {
 
 // A plan's Unknown is Blocked when no change planned before it explains
 // it: before any change, or a Refusal anywhere. A task that ignores errors
-// never blocks: Run goes on past it. Run and Verify never set it.
+// never blocks: its failed Check is Ignored, as Run goes on past it. Run
+// and Verify never set it.
 func TestRunner_PlanBlocked(t *testing.T) {
 	p := Play{Tasks: []Task{
 		{Resource: &checkFails{errors.New("no user")}, IgnoreErrors: true},
@@ -81,6 +82,9 @@ func TestRunner_PlanBlocked(t *testing.T) {
 	}
 	if !slices.Equal(blocked, []bool{false, true, false, false, true, false}) {
 		t.Fatalf("blocked %v: %s", blocked, statuses(got))
+	}
+	if got[0].Status != Ignored || got[5].Status != Ignored {
+		t.Fatalf("ignore_errors: %s", statuses(got))
 	}
 	got, _ = runMode((*Runner).Verify, p)
 	if slices.ContainsFunc(got, func(r Result) bool { return r.Blocked }) {
@@ -121,7 +125,8 @@ func TestRunner_Verify(t *testing.T) {
 
 // A Check that read the host and found it wrong (a Finding: an Assert that
 // does not hold, a Probe with no fix that fails; a Refusal) is Failed in
-// Verify, and Verify reads on. One that could not read is Unknown. Plan
+// Verify, and Verify reads on. One that could not read is Unknown. Either
+// is Ignored in a task that ignores errors, and fails no Verify. Plan
 // reports a Finding Unknown, Blocked by the rules of any other.
 func TestRunner_VerifyFinding(t *testing.T) {
 	ex := &fakeExec{respond: func(string) Output { return Output{Code: 1, Err: errors.New("exit 1")} }}
@@ -132,11 +137,12 @@ func TestRunner_VerifyFinding(t *testing.T) {
 		{Name: "refusal", Resource: &checkFails{Refusal(errors.New("DOMAIN is empty"))}},
 		{Name: "finding", Resource: &checkFails{Finding(errors.New("wrong"))}},
 		{Name: "ignored", Resource: &Assert{Name: "ignored", Holds: no}, IgnoreErrors: true},
+		{Name: "unread", Resource: &checkFails{errors.New("no ufw")}, IgnoreErrors: true},
 		{Name: "missing", Resource: &checkFails{errors.New("no user deploy")}},
 		{Name: "drifted", Resource: &stub{id: "drifted"}},
 	}}
 	got, err := runMode((*Runner).Verify, p)
-	want := "assert=failed probe=failed refusal=failed finding=failed ignored=ignored missing=unknown drifted=changed"
+	want := "assert=failed probe=failed refusal=failed finding=failed ignored=ignored unread=ignored missing=unknown drifted=changed"
 	if s := statuses(got); s != want {
 		t.Fatalf("got  %s\nwant %s", s, want)
 	}
