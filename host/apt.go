@@ -17,7 +17,7 @@ import (
 
 // Apt is a Debian-family host's packages: the resources it makes share
 // one read of what is installed, read again after any of them changed it.
-// Use one Apt per run.
+// One Apt serves any number of runs.
 type Apt struct {
 	Exec Exec
 	// Root is where the host's filesystem is, as this process sees it; ""
@@ -33,9 +33,10 @@ type Apt struct {
 	// sourcesNew: a resource of a's added or changed a source or a key
 	// since the last update, which is due now whatever the lists' age.
 	sourcesNew bool
-	// ranUpdate: an update of a's succeeded in this run, so an Update with
-	// maxAge 0 is not due again (unless sourcesNew).
-	ranUpdate bool
+	// updatedIn is the run (runOf) in which an update of a's last
+	// succeeded, nil before one did: in that run, an Update with maxAge 0
+	// is not due again (unless sourcesNew).
+	updatedIn *runMark
 	// sleep waits between tries; nil waits for real (tests make it instant).
 	sleep func(ctx context.Context, d time.Duration) error
 }
@@ -245,8 +246,8 @@ func sourceDirs() []string {
 func (u *aptUpdate) ID() string { return "apt update" }
 
 // Check's Data is why the update is due ("" when every run updates).
-func (u *aptUpdate) Check(context.Context) (State, error) {
-	if due, why := u.due(); due {
+func (u *aptUpdate) Check(ctx context.Context) (State, error) {
+	if due, why := u.due(ctx); due {
 		st, err := driftData(why, "%s", cmp.Or(why, "update"))
 		st.Action = true
 		return st, err
@@ -256,12 +257,12 @@ func (u *aptUpdate) Check(context.Context) (State, error) {
 
 // due is whether the lists need an update, and why ("" when every run
 // does).
-func (u *aptUpdate) due() (bool, string) {
+func (u *aptUpdate) due(ctx context.Context) (bool, string) {
 	switch {
 	case u.a.sourcesNew:
 		return true, "a source changed"
 	case u.maxAge == 0:
-		return !u.a.ranUpdate, ""
+		return u.a.updatedIn != runOf(ctx), ""
 	}
 	// A fresh image's lists are removed and the directory left, as new as
 	// the image: its age says nothing.
@@ -335,7 +336,7 @@ func (u *aptUpdate) Apply(ctx context.Context, st State) (Result, error) {
 	// An update that fetched nothing new leaves the lists' directory as it
 	// was, and without Ubuntu's stamp hook a stamp is not renewed: dated
 	// here, the lists are as fresh as the update that just succeeded.
-	u.a.sourcesNew, u.a.ranUpdate = false, true
+	u.a.sourcesNew, u.a.updatedIn = false, runOf(ctx)
 	now := time.Now()
 	for _, p := range listsStamps() {
 		if err := os.Chtimes(u.a.path(p), now, now); err != nil && !os.IsNotExist(err) {
@@ -374,7 +375,7 @@ func (o *aptOp) Check(ctx context.Context) (State, error) {
 	}
 	first := ""
 	if o.update != nil {
-		if due, _ := o.update.due(); due {
+		if due, _ := o.update.due(ctx); due {
 			first = "update, "
 		}
 	}
@@ -385,7 +386,7 @@ func (o *aptOp) Apply(ctx context.Context, st State) (Result, error) {
 	todo := st.Data.([]string)
 	first := ""
 	if o.update != nil {
-		if due, why := o.update.due(); due {
+		if due, why := o.update.due(ctx); due {
 			if _, err := o.update.Apply(ctx, State{Data: why}); err != nil {
 				return Result{}, fmt.Errorf("apt update: %w", err)
 			}

@@ -163,13 +163,17 @@ func TestApt_Update(t *testing.T) {
 }
 
 // Update with maxAge 0 runs once in a run, however many tasks ask for
-// it; a source changed after it makes it due again.
+// it, and again in the next run of the same play and Apt; a source
+// changed after it makes it due again.
 func TestApt_UpdateOncePerRun(t *testing.T) {
 	ex := &fakeExec{}
 	a := &Apt{Exec: ex, Root: t.TempDir()}
-	got, err := runMode((*Runner).Run, Play{Tasks: []Task{{Resource: a.Update(0)}, {Resource: a.Update(0)}}})
-	if err != nil || statuses(got) != "apt update=changed apt update=ok" || len(ex.ran("apt-get")) != 1 {
-		t.Fatalf("%s %v, ran %v", statuses(got), err, ex.calls)
+	p := Play{Tasks: []Task{{Resource: a.Update(0)}, {Resource: a.Update(0)}}}
+	for run := 1; run <= 2; run++ {
+		got, err := runMode((*Runner).Run, p)
+		if err != nil || statuses(got) != "apt update=changed apt update=ok" || len(ex.ran("apt-get")) != run {
+			t.Fatalf("run %d: %s %v, ran %v", run, statuses(got), err, ex.calls)
+		}
 	}
 	a.sourcesNew = true
 	if r := apply(t, a.Update(0)); r.Status != Changed || r.Msg != "updated: a source changed" {

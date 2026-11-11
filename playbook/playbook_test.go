@@ -11,6 +11,7 @@ import (
 	"github.com/inference-sh/shigawire/host"
 	"github.com/inference-sh/shigawire/host/hosttest"
 	"github.com/inference-sh/shigawire/module"
+	"github.com/inference-sh/shigawire/module/builtin"
 	"github.com/inference-sh/shigawire/playbook"
 )
 
@@ -475,5 +476,22 @@ steps:
 	// Load stops at the first problem, as before.
 	if _, err := load(path, playbook.Options{Env: env(hosttest.New(t))}); err == nil || !strings.Contains(err.Error(), "cmd is empty") {
 		t.Fatal(err)
+	}
+}
+
+// A Playbook applied twice updates the package lists in each run: the Apt
+// in its Env serves both.
+func TestApplyTwiceUpdatesTwice(t *testing.T) {
+	h := hosttest.New(t)
+	pb, err := playbook.Load(hosttest.WriteFile(t, t.TempDir(), "site.yml", "steps:\n  - name: apt\n    tasks:\n      - apt: {update_cache: true}\n"),
+		playbook.Options{Registry: builtin.Registry(), Env: env(h)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for run := 1; run <= 2; run++ {
+		got, err := hosttest.Results(context.Background(), func(ctx context.Context, r *host.Runner) error { return pb.Apply(ctx, r) })
+		if err != nil || len(got) != 1 || got[0].Status != host.Changed || len(h.Exec.Ran("apt-get")) != run {
+			t.Fatalf("run %d: %s %v, ran %v", run, hosttest.Statuses(got), err, h.Exec.Calls())
+		}
 	}
 }

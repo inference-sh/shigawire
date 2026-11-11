@@ -6,7 +6,6 @@ import (
 
 	"github.com/inference-sh/shigawire/host"
 	"github.com/inference-sh/shigawire/host/hosttest"
-	"github.com/inference-sh/shigawire/module"
 )
 
 func TestApt(t *testing.T) {
@@ -24,13 +23,15 @@ func TestApt(t *testing.T) {
 	if got := h.Exec.Ran("apt-get"); len(got) != 1 || !strings.HasSuffix(got[0], "remove --purge jq") || h.Packages["jq"] {
 		t.Fatal(got, h.Packages)
 	}
-	// An update alone is an action, once a run: this run updated already.
+	// An update alone is an action, once a run, and again in the next run
+	// with the same Env.
 	update := map[string]any{"update_cache": true}
-	if r := hosttest.ApplyOne(t, build(t, env, "apt", update)); r.Status != host.OK {
-		t.Fatalf("second update in a run: %s", r.Status)
-	}
-	if r := hosttest.ApplyOne(t, build(t, module.NewEnv(h.Exec, h.Root), "apt", update)); r.Status != host.Changed || !r.Action {
-		t.Fatalf("%s action=%v", r.Status, r.Action)
+	play := host.Play{Tasks: []host.Task{{Resource: build(t, env, "apt", update)}, {Resource: build(t, env, "apt", update)}}}
+	for run := 1; run <= 2; run++ {
+		got, err := hosttest.Run(hosttest.Apply, play)
+		if err != nil || got[0].Status != host.Changed || !got[0].Action || got[1].Status != host.OK {
+			t.Fatalf("run %d: %+v %v", run, got, err)
+		}
 	}
 }
 
