@@ -214,8 +214,8 @@ func isInstalled(pkgs map[string]pkgState, n string) bool {
 }
 
 // Update is the package lists, at most maxAge old (0: updated once each
-// run, by the first Update that runs),
-// and updated whatever their age when a source or a key changed since the
+// run of a Runner, by the first Update that runs; every time without a
+// Runner), and updated whatever their age when a source or a key changed since the
 // last update: through a's own Repo, or by its file's time. A fetch that
 // fails fails the update (APT::Update::Error-Mode=any; apt-get itself
 // only warns and exits 0 over the old lists), which is tried updateTries

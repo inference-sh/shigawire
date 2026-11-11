@@ -181,6 +181,23 @@ func TestApt_UpdateOncePerRun(t *testing.T) {
 	}
 }
 
+// Without a Runner, every Check of an Update with maxAge 0 is a run of its
+// own: the update is due each time.
+func TestApt_UpdateOutsideARunner(t *testing.T) {
+	ex := &fakeExec{}
+	u := (&Apt{Exec: ex, Root: t.TempDir()}).Update(0)
+	ctx := context.Background()
+	for n := 1; n <= 2; n++ {
+		st, err := u.Check(ctx)
+		if err != nil || st.InPlace {
+			t.Fatalf("check %d: %+v %v", n, st, err)
+		}
+		if _, err := u.Apply(ctx, st); err != nil || len(ex.ran("apt-get")) != n {
+			t.Fatalf("apply %d: %v, ran %v", n, err, ex.calls)
+		}
+	}
+}
+
 // A source or key that changed after the last update makes fresh lists
 // due, in any later run: the host's files hold the fact.
 func TestApt_UpdateAfterASourceChanged(t *testing.T) {

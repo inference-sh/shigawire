@@ -323,16 +323,13 @@ type runMark struct{ _ byte }
 
 type runKey struct{}
 
-// outsideRuns is the run of a context that is in none: a resource checked
-// or applied without a Runner.
-var outsideRuns = new(runMark)
-
-// runOf is the run ctx is in.
+// runOf is the run ctx is in. A context in none (a resource checked or
+// applied without a Runner) is a new run on every call.
 func runOf(ctx context.Context) *runMark {
 	if r, ok := ctx.Value(runKey{}).(*runMark); ok {
 		return r
 	}
-	return outsideRuns
+	return new(runMark)
 }
 
 // playRun is one run of a play.
