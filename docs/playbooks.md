@@ -81,6 +81,7 @@ module's arguments (a mapping, or nothing), and these keys:
 | `notify`        | A handler name or a list of them, run when the task changed something. Handlers are named across the whole playbook. |
 | `when`          | A condition, or a list of conditions that must all hold. |
 | `register`      | A name under which later conditions read what the task did. |
+| `needs`         | A registered name or a list of them: earlier tasks this one depends on. When one of them failed in this run, this one is not checked: `plan` and `verify` report it `unknown` (`not checked: it needs swarm, which failed`), not a drift read from a host that task left as it was, and `apply` fails it. |
 | `ignore_errors` | `true`: a failure is reported `ignored` and the play goes on. |
 
 A key that is none of these is taken as the module; a second one is an
@@ -308,8 +309,24 @@ Exit codes:
 | code | meaning |
 |------|---------|
 | 0 | Success. `verify`: no drift. |
-| 1 | A failure: a load error, a failed task or handler, in `verify` an `unknown`, or in `plan` a `fail` task whose `when` holds. Other `unknown`s in a plan (an `assert` that does not hold, an owner an earlier task would create) do not change plan's exit code: the plan cannot tell whether the tasks before them would make them pass. |
+| 1 | A failure: a load error, a failed task or handler, in `verify` an `unknown`, or in `plan` an `unknown` no earlier change can explain (below). |
 | 2 | `verify`: drift. `plan` and `apply` with `--detailed-exitcode`: something changed or would change. |
+
+An `unknown` in a plan is a check that failed. `plan` exits 0 when it
+could plan every task, or when each `unknown` comes after a change planned
+before it, which it may depend on (an owner a `user` task would create):
+`apply` makes that change first, and the plan cannot tell whether the
+check would pass then. The summary counts them:
+
+```
+plan: 8 changed, 2 unknown
+2 unknown: checks that may depend on changes planned before them, which apply makes first
+```
+
+`plan` exits 1 for an `unknown` that `apply` fails at whatever runs before
+it: a refusal (a `fail` task whose `when` holds, a `docker_swarm` that is
+locked, pending or in error), or a check that failed with no change planned
+before it, so `apply` reads the same host there.
 
 ## Checking a playbook
 
@@ -331,7 +348,8 @@ It reports:
 - undefined variables, in arguments, names and `when`;
 - `when` conditions that do not parse, or read a name no earlier task
   registers;
-- `notify` or `needs` naming no handler;
+- `notify` or a handler's `needs` naming no handler, a task's `needs`
+  naming no earlier `register`;
 - a relative `src` missing from `files/`.
 
 Every step is checked, the manual ones too; `--only` is not taken.

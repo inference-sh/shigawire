@@ -24,6 +24,7 @@ changed  nginx: nginx running: enable and start
 changed  handler reload nginx: nginx -t -q
 skipped  health: nginx answers on port 80: when mode == verify
 plan: 1 ok, 8 changed, 3 unknown, 2 skipped
+3 unknown: checks that may depend on changes planned before them, which apply makes first
 
 $ sudo shiga apply examples/web/web.yml --var DOMAIN=example.com --quiet
 ...
@@ -33,7 +34,7 @@ $ sudo shiga apply examples/web/web.yml --var DOMAIN=example.com --quiet
 apply: 11 ok, 2 skipped
 ```
 
-`unknown` in a plan is a check that depends on an earlier change: the `deploy` user does not exist until apply creates it. (This output is from shiga's simulated host, `shiga test`; a real host prints the same.)
+`unknown` in a plan is a check that failed. Here each one depends on an earlier change: the `deploy` user does not exist until apply creates it. plan cannot tell such a check from one that will fail in apply too, so it exits 0 and counts them. It exits 1 for an unknown no earlier change can explain: a refusal (a `fail` task, a locked docker swarm), or a check that failed with no change planned before it. (This output is from shiga's simulated host, `shiga test`; a real host prints the same.)
 
 ## Why
 
@@ -90,6 +91,7 @@ A playbook is a list of **steps**. A step holds **tasks**, and each task names o
 
 - **Variables:** `${NAME}`, from the playbook's `vars`, `--vars FILE` (YAML, or `NAME=VALUE` lines in a `.env` file), `SHIGA_VAR_NAME` in the environment, and `--var NAME=VALUE`, in that order. An undefined variable is an error with its file and line.
 - **Conditions:** `when: os.id == ubuntu`, `when: ${ENABLE_TLS}`, `when: docker.rc != 0` on a result saved with `register: docker`.
+- **Dependencies:** `needs: swarm` on a task that reads what the task registered as `swarm` puts in place. When that one failed, this one is not checked: plan and verify report it unknown with the reason, and apply fails it.
 - **Selecting steps:** `--only firewall,nginx` by name or tag. A step marked `manual` runs only when selected.
 
 There are no templates and no loops, on purpose. A full example is in [examples/web](examples/web). The format reference is [docs/playbooks.md](docs/playbooks.md).
@@ -105,7 +107,7 @@ There are no templates and no loops, on purpose. A full example is in [examples/
 | `shiga test PLAYBOOK` | apply, apply again, verify, on a simulated Debian host |
 | `shiga modules` | every module and its arguments |
 
-Exit codes: 0 ok, 1 failure, 2 drift (`verify`) or changes (`--detailed-exitcode`).
+Exit codes: 0 ok, 1 failure (in `plan`: an unknown no earlier change can explain), 2 drift (`verify`) or changes (`--detailed-exitcode`).
 
 ## Modules
 

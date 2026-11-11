@@ -75,16 +75,25 @@ flags:
 
 check reports every problem, a line each: YAML errors, unknown modules, module
 argument errors, undefined variables, bad when conditions, notify or needs
-naming no handler, a missing files/ src. It checks every step, manual ones too.
+naming no handler or registered task, a missing files/ src. It checks every
+step, manual ones too.
 
 test is a simulation: packages, units, accounts, sysctl, ufw and docker swarm
 are modelled, and any other command succeeds with no output. It fails when a
 task fails, when the second apply changes anything but an action, or when
 verify finds drift.
 
+plan reports unknown for a check that failed. One after a change planned
+before it may depend on that change (a file owned by a user apply creates):
+plan exits 0 and says how many there are. One apply would fail at whatever
+runs before it makes plan exit 1: a refusal (a fail task whose when holds,
+a docker swarm that is locked), or a check that failed with no change
+planned before it.
+
 Variables also come from the environment: SHIGA_VAR_NAME sets NAME.
-Exit codes: 0 ok, 1 failure (check: a problem; test: no convergence),
-2 drift (verify) or changes (--detailed-exitcode).
+Exit codes: 0 ok, 1 failure (check: a problem; test: no convergence; plan:
+an unknown no earlier change can explain), 2 drift (verify) or changes
+(--detailed-exitcode).
 `
 
 // cli is the command, with what it acts through.
@@ -193,11 +202,24 @@ func (c *cli) run(ctx context.Context, cmd string, args []string) int {
 		return exitFailed
 	}
 	counts := map[host.Status]int{}
-	refused := 0
+	// A plan's unknowns. stuck are those apply fails at whatever runs
+	// before them: a Refusal (a fail task, a swarm that is locked), or a
+	// check that failed with no change planned before it, so apply reads
+	// the same host there. waiting are the others, which may depend on a
+	// change before them (a user apply creates): the plan cannot tell.
+	var waiting, stuck int
+	changedBefore := false
 	r := &host.Runner{OnResult: func(rr host.Result) {
 		counts[rr.Status]++
-		if rr.Status == host.Unknown && host.IsRefusal(rr.Err) {
-			refused++
+		switch {
+		case rr.Status != host.Unknown:
+		case host.IsRefusal(rr.Err) || !changedBefore:
+			stuck++
+		default:
+			waiting++
+		}
+		if rr.Status == host.Changed {
+			changedBefore = true
 		}
 		c.line(rr, *quiet)
 	}}
@@ -211,11 +233,18 @@ func (c *cli) run(ctx context.Context, cmd string, args []string) int {
 		runErr = pb.Verify(ctx, r)
 	}
 	c.summary(cmd, counts)
+	if cmd == "plan" {
+		if waiting > 0 {
+			fmt.Fprintf(c.stdout, "%d unknown: checks that may depend on changes planned before them, which apply makes first\n", waiting)
+		}
+		if stuck > 0 {
+			fmt.Fprintf(c.stdout, "%d unknown that no earlier change can explain: apply stops at the first\n", stuck)
+		}
+	}
 	switch {
 	case cmd == "verify" && (counts[host.Unknown] > 0 || counts[host.Failed] > 0):
 		return exitFailed
-	case cmd == "plan" && refused > 0:
-		// A fail task the plan reached: apply stops there.
+	case cmd == "plan" && stuck > 0:
 		return exitFailed
 	case cmd == "verify" && counts[host.Changed] > 0:
 		return exitChanged
