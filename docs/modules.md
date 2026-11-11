@@ -392,7 +392,7 @@ run a string through `/bin/sh -c`.
 | `env` | map | variables added to the environment |
 | `timeout` | duration | kill it after this long |
 | `watch` | list of paths | changed only when one of these files' content changed |
-| `changes_packages` | bool | it installs or removes packages: later apt tasks read dpkg again |
+| `changes_packages` | bool | it installs or removes packages: later apt tasks read dpkg again (they do anyway when dpkg's status file changed) |
 
 ```yaml
 - command:

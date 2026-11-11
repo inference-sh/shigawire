@@ -401,3 +401,42 @@ func TestApt_InstallArch(t *testing.T) {
 		t.Fatalf("%+v", pkgs)
 	}
 }
+
+// What dpkg has is read again when its status file changed: an installer
+// that ran apt or dpkg outside the Apt's resources.
+func TestApt_ReadsAgainWhenDpkgChanged(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	status := filepath.Join(root, "var/lib/dpkg/status")
+	os.MkdirAll(filepath.Dir(status), 0o755)
+	os.WriteFile(status, []byte("Package: curl\n"), 0o644)
+	d := newFakeDpkg(map[string]string{"curl": "ii \t8"})
+	a := &Apt{Exec: d.ex, Root: root}
+	if ok, err := a.Installed(ctx, "jq"); ok || err != nil {
+		t.Fatal(ok, err)
+	}
+	d.pkgs["jq"] = "ii \t1.7"
+	if ok, _ := a.Installed(ctx, "jq"); ok || len(d.ex.ran("dpkg-query")) != 1 {
+		t.Fatalf("read again with dpkg's status unchanged: %v", d.ex.calls)
+	}
+	os.WriteFile(status, []byte("Package: curl\n\nPackage: jq\n"), 0o644)
+	if ok, _ := a.Installed(ctx, "jq"); !ok {
+		t.Fatal("not read again after dpkg's status changed")
+	}
+}
+
+// InstallUpdating updates the lists first only when something is to be
+// installed.
+func TestApt_InstallUpdating(t *testing.T) {
+	d := newFakeDpkg(map[string]string{"curl": "ii \t8"})
+	a := &Apt{Exec: d.ex, Root: t.TempDir()}
+	if r := apply(t, a.InstallUpdating(0, "curl")); r.Status != OK || len(d.ex.calls) != 1 {
+		t.Fatalf("%s, ran %v", r.Status, d.ex.calls)
+	}
+	if r := converge(t, a.InstallUpdating(0, "curl", "jq"), Changed); r.Msg != "updated, installed jq" {
+		t.Fatalf("msg %q", r.Msg)
+	}
+	if got := d.ex.ran("apt-get"); len(got) != 2 || !strings.HasSuffix(got[0], " update") || !strings.HasSuffix(got[1], " install jq") {
+		t.Fatalf("ran %v", got)
+	}
+}

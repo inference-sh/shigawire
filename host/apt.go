@@ -27,6 +27,9 @@ type Apt struct {
 	Root string
 
 	pkgs map[string]pkgState // nil until read, and after apt changed it
+	// pkgsAt is dpkg's status file as it was when pkgs was read: one that
+	// changed since (something outside a ran dpkg) makes pkgs stale.
+	pkgsAt dpkgStamp
 	// sourcesNew: a resource of a's added or changed a source or a key
 	// since the last update, which is due now whatever the lists' age.
 	sourcesNew bool
@@ -135,15 +138,34 @@ func aptLocked(out string) bool {
 		strings.Contains(out, "Unable to acquire the dpkg frontend lock")
 }
 
+// dpkgStamp is dpkg's status file's time and size; zero when there is
+// none.
+type dpkgStamp struct {
+	mod  time.Time
+	size int64
+}
+
+func (a *Apt) dpkgStamp() dpkgStamp {
+	fi, err := os.Stat(a.path("var/lib/dpkg/status"))
+	if err != nil {
+		return dpkgStamp{}
+	}
+	return dpkgStamp{fi.ModTime(), fi.Size()}
+}
+
+// read is what dpkg has installed: read once, and again after a's own
+// apt-get ran, Invalidate, or dpkg's status file changed (an installer
+// that ran apt or dpkg).
 func (a *Apt) read(ctx context.Context) (map[string]pkgState, error) {
-	if a.pkgs != nil {
+	stamp := a.dpkgStamp()
+	if a.pkgs != nil && stamp == a.pkgsAt {
 		return a.pkgs, nil
 	}
 	o, err := run(ctx, a.Exec, short("dpkg-query", "-W", "-f", `${Package}\t${db:Status-Abbrev}\t${Version}\n`))
 	if err != nil {
 		return nil, fmt.Errorf("installed packages: %w", err)
 	}
-	a.pkgs = parseDpkgQuery(o.Out)
+	a.pkgs, a.pkgsAt = parseDpkgQuery(o.Out), stamp
 	return a.pkgs, nil
 }
 
@@ -167,7 +189,8 @@ func parseDpkgQuery(out string) map[string]pkgState {
 
 // Invalidate drops what a read of the installed packages: they are read
 // again when next asked. For what changed them outside a's resources (a
-// Command that runs apt-get: Command.Apt).
+// Command that runs apt-get: Command.Apt) on a host whose dpkg status
+// file's time and size do not tell.
 func (a *Apt) Invalidate() { a.pkgs = nil }
 
 // Installed reports whether a package is installed, named as Install
@@ -336,6 +359,9 @@ type aptOp struct {
 	args func(todo []string) []string
 	// verb and done say it in the messages ("install", "installed").
 	verb, done string
+	// update, when set, runs first when it is due and there is
+	// something to do.
+	update *aptUpdate
 }
 
 func (o *aptOp) ID() string { return o.id }
@@ -346,16 +372,31 @@ func (o *aptOp) Check(ctx context.Context) (State, error) {
 	if err != nil || len(todo) == 0 {
 		return State{InPlace: err == nil}, err
 	}
-	return driftData(todo, "%s %s", o.verb, strings.Join(todo, " "))
+	first := ""
+	if o.update != nil {
+		if due, _ := o.update.due(); due {
+			first = "update, "
+		}
+	}
+	return driftData(todo, "%s%s %s", first, o.verb, strings.Join(todo, " "))
 }
 
 func (o *aptOp) Apply(ctx context.Context, st State) (Result, error) {
 	todo := st.Data.([]string)
+	first := ""
+	if o.update != nil {
+		if due, why := o.update.due(); due {
+			if _, err := o.update.Apply(ctx, State{Data: why}); err != nil {
+				return Result{}, fmt.Errorf("apt update: %w", err)
+			}
+			first = "updated, "
+		}
+	}
 	defer o.a.Invalidate()
 	if _, err := o.a.get(ctx, 30*time.Minute, o.args(todo)...); err != nil {
 		return Result{}, err
 	}
-	return changed("%s %s", o.done, strings.Join(todo, " "))
+	return changed("%s%s %s", first, o.done, strings.Join(todo, " "))
 }
 
 // Install is packages installed: a name at any version, a name=version at
@@ -379,6 +420,15 @@ func (a *Apt) Install(names ...string) Resource {
 			}
 			return missing, nil
 		}}
+}
+
+// InstallUpdating is Install, with the package lists updated first, as
+// Update(maxAge) has them, when something is to be installed: a host
+// that has the packages needs no new lists.
+func (a *Apt) InstallUpdating(maxAge time.Duration, names ...string) Resource {
+	o := a.Install(names...).(*aptOp)
+	o.update = &aptUpdate{a: a, maxAge: maxAge}
+	return o
 }
 
 // Remove is the named packages not on the host, nor any part of them:
@@ -466,8 +516,8 @@ func (r *aptRepo) files(ctx context.Context) ([]File, error) {
 		return nil, fmt.Errorf("the key for %s: %s: %w", r.r.Name, cmp.Or(r.r.KeyURL, "the engine's"), err)
 	}
 	return []File{
-		{Path: r.a.path(keyPath), Content: key, Mode: 0o644},
-		{Path: r.a.path(r.r.SourcesPath()), Content: []byte(r.r.Sources(keyPath)), Mode: 0o644},
+		{Path: r.a.path(keyPath), Content: key, Mode: 0o644, Parents: true},
+		{Path: r.a.path(r.r.SourcesPath()), Content: []byte(r.r.Sources(keyPath)), Mode: 0o644, Parents: true},
 	}, nil
 }
 
@@ -547,9 +597,6 @@ type fileTodo struct {
 func (r *aptRepo) Apply(ctx context.Context, st State) (Result, error) {
 	var did []string
 	for _, t := range st.Data.([]fileTodo) {
-		if err := os.MkdirAll(filepath.Dir(t.f.Path), 0o755); err != nil {
-			return Result{}, err
-		}
 		if _, err := t.f.Apply(ctx, t.st); err != nil {
 			return Result{}, err
 		}
