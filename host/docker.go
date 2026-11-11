@@ -51,9 +51,21 @@ func (s *Swarm) ID() string {
 	return "docker swarm"
 }
 
+// Validate reports a join without a token or a manager's address, or an
+// init with either.
+func (s *Swarm) Validate() error {
+	switch {
+	case s.Join && (s.JoinToken == "" || len(s.RemoteAddrs) == 0):
+		return errors.New("docker swarm join needs a join token and a manager's address")
+	case !s.Join && (s.JoinToken != "" || len(s.RemoteAddrs) > 0):
+		return errors.New("a join token and managers' addresses are for docker swarm join")
+	}
+	return nil
+}
+
 func (s *Swarm) Check(ctx context.Context) (State, error) {
-	if s.Join && (s.JoinToken == "" || len(s.RemoteAddrs) == 0) {
-		return State{}, errors.New("docker swarm join needs a token and a manager's address")
+	if err := s.Validate(); err != nil {
+		return State{}, err
 	}
 	st, err := swarmState(ctx, s.Exec)
 	if err != nil {
