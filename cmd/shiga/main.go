@@ -40,7 +40,7 @@ func main() {
 		stdout:  os.Stdout,
 		stderr:  os.Stderr,
 		environ: os.Environ(),
-		env:     module.Env{Exec: exec, Apt: &host.Apt{Exec: exec}},
+		env:     module.NewEnv(exec, ""),
 		reg:     builtin.Registry(),
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

@@ -50,6 +50,13 @@ type Env struct {
 	describe func([]Arg)
 }
 
+// NewEnv is the Env of a run on the host whose commands x runs and whose
+// files are under root ("" is /): its one Apt runs through x under root
+// too. Files is left for the caller.
+func NewEnv(x host.Exec, root string) Env {
+	return Env{Exec: x, Apt: &host.Apt{Exec: x, Root: root}, Root: root}
+}
+
 // Path is the host path p under Root.
 func (e Env) Path(p string) string { return host.UnderRoot(e.Root, p) }
 

@@ -32,7 +32,8 @@ func Load(h *hosttest.Host, path string, opt playbook.Options) (*playbook.Playbo
 		opt.Registry = builtin.Registry()
 	}
 	files := opt.Env.Files
-	opt.Env = module.Env{Exec: h.Exec, Apt: &host.Apt{Exec: h.Exec, Root: h.Root}, Root: h.Root, Files: files}
+	opt.Env = module.NewEnv(h.Exec, h.Root)
+	opt.Env.Files = files
 	return playbook.Load(path, opt)
 }
 

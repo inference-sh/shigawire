@@ -58,8 +58,9 @@ func Check(path string, opt Options) Report {
 		return rep
 	}
 	defer os.RemoveAll(root)
-	x := noExec{}
-	opt.Env = module.Env{Exec: x, Apt: &host.Apt{Exec: x, Root: root}, Root: root, Files: opt.Env.Files}
+	files := opt.Env.Files
+	opt.Env = module.NewEnv(noExec{}, root)
+	opt.Env.Files = files
 	opt.Only = nil
 	l, err := loadChecked(path, opt, chk)
 	if err != nil {

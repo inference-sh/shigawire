@@ -40,29 +40,47 @@ func (r *Registry) Args(name string) (args []Arg, ok bool) {
 	return out, true
 }
 
+// fieldKey is the key Decode fills the struct field f from: its yaml
+// tag's name, else its name lowercased. embed: f is an untagged embedded
+// struct (or pointer to one), whose own fields are keys beside f's
+// siblings. ok is false for a field with no key: tagged "-", or
+// unexported.
+func fieldKey(f reflect.StructField) (key string, embed, ok bool) {
+	tag, _, _ := strings.Cut(f.Tag.Get("yaml"), ",")
+	if tag == "-" {
+		return "", false, false
+	}
+	ft := f.Type
+	if ft.Kind() == reflect.Pointer {
+		ft = ft.Elem()
+	}
+	if f.Anonymous && tag == "" && ft.Kind() == reflect.Struct {
+		return "", true, true
+	}
+	if !f.IsExported() {
+		return "", false, false
+	}
+	if tag == "" {
+		tag = strings.ToLower(f.Name)
+	}
+	return tag, false, true
+}
+
 // argsOf are the keys Decode fills in a struct of type t.
 func argsOf(prefix string, t reflect.Type, into []Arg) []Arg {
 	for i := range t.NumField() {
 		f := t.Field(i)
-		tag, _, _ := strings.Cut(f.Tag.Get("yaml"), ",")
-		if tag == "-" {
+		tag, embed, ok := fieldKey(f)
+		switch {
+		case !ok:
 			continue
-		}
-		if f.Anonymous && tag == "" {
+		case embed:
 			ft := f.Type
 			if ft.Kind() == reflect.Pointer {
 				ft = ft.Elem()
 			}
-			if ft.Kind() == reflect.Struct {
-				into = argsOf(prefix, ft, into)
-				continue
-			}
-		}
-		if !f.IsExported() {
+			into = argsOf(prefix, ft, into)
 			continue
-		}
-		if tag == "" {
-			tag = strings.ToLower(f.Name)
 		}
 		key := prefix + tag
 		into = append(into, Arg{Key: key, Type: typeName(f.Type), Doc: f.Tag.Get("doc")})

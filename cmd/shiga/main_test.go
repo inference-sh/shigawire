@@ -51,7 +51,7 @@ func newHarness(t *testing.T) *harness {
 	return &harness{h: h, stdout: &out, stderr: &errOut, c: &cli{
 		stdout: &out, stderr: &errOut,
 		environ: []string{"SHIGA_VAR_WHO=env"},
-		env:     module.Env{Exec: h.Exec, Root: h.Root},
+		env:     module.NewEnv(h.Exec, h.Root),
 		reg:     testRegistry(),
 	}}
 }

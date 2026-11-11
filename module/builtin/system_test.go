@@ -270,7 +270,7 @@ func TestHandlers(t *testing.T) {
 // locked one is unlocked; one locked with a hash is an error.
 func TestUserNoPassword(t *testing.T) {
 	h := sim.New(t)
-	env := module.Env{Exec: h.Exec, Root: h.Root}
+	env := module.NewEnv(h.Exec, h.Root)
 	hosttest.Converge(t, build(t, env, "user", map[string]any{"name": "ok", "no_password": true}), host.Changed)
 	if pw := h.Users["ok"].Password; pw != "*" {
 		t.Fatalf("new user: %q", pw)

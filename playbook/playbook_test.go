@@ -106,7 +106,7 @@ func write(t *testing.T, dir, name, content string) string {
 	return p
 }
 
-func env(h *hosttest.Host) module.Env { return module.Env{Exec: h.Exec, Root: h.Root} }
+func env(h *hosttest.Host) module.Env { return module.NewEnv(h.Exec, h.Root) }
 
 // run loads the playbook in content and runs it with m.
 func run(t *testing.T, h *hosttest.Host, content string, opt playbook.Options, m func(*playbook.Playbook, context.Context, *host.Runner) error) ([]host.Result, error) {
