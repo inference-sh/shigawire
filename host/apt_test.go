@@ -332,6 +332,18 @@ func TestApt_UpdateNothingNew(t *testing.T) {
 
 const testKey = "-----BEGIN PGP PUBLIC KEY BLOCK-----\nmQINBF\n-----END PGP PUBLIC KEY BLOCK-----\n"
 
+// Repo.Client, when set, is what fetches the key.
+func TestApt_RepoClient(t *testing.T) {
+	rt := &roundTrip{body: testKey}
+	root := t.TempDir()
+	a := &Apt{Exec: &fakeExec{}, Root: root}
+	apply(t, a.Repo(Repo{Name: "r", URIs: []string{"https://example.invalid/apt"}, Suites: []string{"/"},
+		KeyURL: "https://unreachable.invalid/key", Client: &http.Client{Transport: rt}}))
+	if b, _ := os.ReadFile(filepath.Join(root, "etc/apt/keyrings/r.asc")); string(b) != testKey || rt.hits != 1 {
+		t.Fatalf("key %q, %d fetches", b, rt.hits)
+	}
+}
+
 func TestApt_Repo(t *testing.T) {
 	key := testKey
 	hits := 0

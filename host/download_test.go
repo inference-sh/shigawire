@@ -3,6 +3,7 @@ package host
 import (
 	"crypto/sha256"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -103,5 +104,27 @@ func TestDownload_HTTPError(t *testing.T) {
 	d := &Download{URL: url + "/missing", Path: filepath.Join(t.TempDir(), "x")}
 	if _, err := runMode((*Runner).Run, Play{Tasks: []Task{{Resource: d}}}); err == nil || !strings.Contains(err.Error(), "404") {
 		t.Fatalf("err %v", err)
+	}
+}
+
+// roundTrip serves body for any request, counting them.
+type roundTrip struct {
+	body string
+	hits int
+}
+
+func (rt *roundTrip) RoundTrip(r *http.Request) (*http.Response, error) {
+	rt.hits++
+	return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Body: io.NopCloser(strings.NewReader(rt.body)), Request: r}, nil
+}
+
+// Client, when set, is what fetches the URL.
+func TestDownload_Client(t *testing.T) {
+	rt := &roundTrip{body: "payload"}
+	path := filepath.Join(t.TempDir(), "f")
+	d := &Download{URL: "http://unreachable.invalid/f", Path: path, SHA256: sum("payload"), Client: &http.Client{Transport: rt}}
+	converge(t, d, Changed)
+	if b, _ := os.ReadFile(path); string(b) != "payload" || rt.hits != 1 {
+		t.Fatalf("%q, %d fetches", b, rt.hits)
 	}
 }
