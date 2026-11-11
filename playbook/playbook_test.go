@@ -483,7 +483,7 @@ steps:
 // in its Env serves both.
 func TestApplyTwiceUpdatesTwice(t *testing.T) {
 	h := hosttest.New(t)
-	pb, err := playbook.Load(hosttest.WriteFile(t, t.TempDir(), "site.yml", "steps:\n  - name: apt\n    tasks:\n      - apt: {update_cache: true}\n"),
+	pb, err := playbook.Load(hosttest.Playbook(t, "steps:\n  - name: apt\n    tasks:\n      - apt: {update_cache: true}\n"),
 		playbook.Options{Registry: builtin.Registry(), Env: env(h)})
 	if err != nil {
 		t.Fatal(err)
