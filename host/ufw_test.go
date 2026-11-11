@@ -1,6 +1,9 @@
 package host
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 func TestUFWTuples(t *testing.T) {
 	for _, c := range []struct {
@@ -24,7 +27,10 @@ func TestUFWTuples(t *testing.T) {
 }
 
 // Two rules that differ only in action or comment are one rule to ufw:
-// the second would update the first, every run.
+// the second would update the first, every run. So is an Absent rule
+// that deletes a listed one. An Absent rule with another action deletes
+// what was there before the listed rule replaces it: a move from limit
+// to allow.
 func TestUFWOneRuleTwice(t *testing.T) {
 	u := &UFW{Rules: []UFWRule{
 		{Action: "allow", Proto: "tcp", Port: "80"},
@@ -37,5 +43,35 @@ func TestUFWOneRuleTwice(t *testing.T) {
 	u.Rules[2].Proto = "udp"
 	if err := u.Validate(); err != nil {
 		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		rules []UFWRule
+		err   string
+	}{
+		{[]UFWRule{
+			{Action: "limit", Proto: "tcp", Port: "22", Absent: true},
+			{Action: "allow", Proto: "tcp", Port: "22"},
+		}, ""},
+		{[]UFWRule{
+			{Action: "allow", Proto: "tcp", Port: "22", Comment: "old", Absent: true},
+			{Action: "allow", Proto: "tcp", Port: "22", Comment: "ssh"},
+		}, ""},
+		{[]UFWRule{
+			{Action: "allow", Proto: "tcp", Port: "22", Absent: true},
+			{Action: "deny", Proto: "tcp", Port: "22", Absent: true},
+		}, ""},
+		{[]UFWRule{
+			{Action: "allow", Proto: "tcp", Port: "22", Comment: "ssh"},
+			{Action: "allow", Proto: "tcp", Port: "22", Absent: true},
+		}, "ufw rule 2 deletes rule 1"},
+		{[]UFWRule{
+			{Action: "allow", Proto: "tcp", Port: "22", Comment: "ssh", Absent: true},
+			{Action: "allow", Proto: "tcp", Port: "22", Comment: "ssh"},
+		}, "ufw rule 1 deletes rule 2"},
+	} {
+		err := (&UFW{Rules: c.rules}).Validate()
+		if got := fmt.Sprint(err); (c.err == "" && err != nil) || (c.err != "" && got != c.err) {
+			t.Errorf("%+v: %v, want %q", c.rules, err, c.err)
+		}
 	}
 }
