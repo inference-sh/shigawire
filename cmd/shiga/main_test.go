@@ -141,11 +141,20 @@ func TestFailures(t *testing.T) {
 	if code := x.run("verify", bad); code != exitFailed || !strings.Contains(x.stdout.String(), "unknown  s: failing: broken") {
 		t.Fatal(code, x.stdout)
 	}
-	if code := x.run("plan", bad); code != exitOK {
+	// An unknown with no change planned before it: apply reads the same
+	// host there, and fails.
+	if code := x.run("plan", bad); code != exitFailed || !strings.HasSuffix(x.stdout.String(), "1 unknown that no earlier change can explain: apply stops at the first\n") {
+		t.Fatal(code, x.stdout)
+	}
+	// After a change it may depend on: plan cannot tell, exits 0, and says
+	// so.
+	after := writePlaybook(t, "steps:\n  - name: s\n    tasks:\n      - test.file: {path: /x, content: y}\n      - test.fail:\n")
+	if code := x.run("plan", after); code != exitOK || !strings.HasSuffix(x.stdout.String(),
+		"plan: 1 changed, 1 unknown\n1 unknown: checks that may depend on changes planned before them, which apply makes first\n") {
 		t.Fatal(code, x.stdout)
 	}
 	// A fail task the plan reaches is a refusal apply stops at.
-	refused := writePlaybook(t, "steps:\n  - name: s\n    tasks:\n      - fail: {msg: not for this host}\n      - test.file: {path: /x, content: y}\n")
+	refused := writePlaybook(t, "steps:\n  - name: s\n    tasks:\n      - test.file: {path: /x, content: y}\n      - fail: {msg: not for this host}\n")
 	for _, args := range [][]string{{"plan", refused}, {"plan", refused, "--detailed-exitcode"}} {
 		if code := x.run(args...); code != exitFailed || !strings.Contains(x.stdout.String(), "unknown  s: fail: not for this host") {
 			t.Fatal(args, code, x.stdout)
