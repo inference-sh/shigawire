@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -78,14 +79,15 @@ func LookupOwner(ctx context.Context, x Exec, owner, group string) (*Owner, erro
 	return own, nil
 }
 
-// numericID is s as a uid or gid: digits only, below 2^32-1 (-1 as a
-// 32-bit id means none).
+// numericID is s as a uid or gid: digits only, at most 2^31-1. Linux
+// takes ids up to 2^32-2, but tools disagree above 2^31-1 (it is -1 in a
+// signed 32-bit id), and an int is 32 bits on some platforms.
 func numericID(s string) (int, bool) {
 	if s == "" || strings.Trim(s, "0123456789") != "" {
 		return 0, false
 	}
-	n, err := strconv.ParseUint(s, 10, 32)
-	if err != nil || n == 1<<32-1 {
+	n, err := strconv.ParseInt(s, 10, 32)
+	if err != nil || n < 0 || n > math.MaxInt32 {
 		return 0, false
 	}
 	return int(n), true

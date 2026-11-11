@@ -65,6 +65,9 @@ func TestLookupOwner(t *testing.T) {
 		{owner: "app", group: "ghosts", err: "there is no group ghosts"},
 		{owner: "-1", err: "there is no user -1"},
 		{owner: "4294967295", err: "there is no user 4294967295"},
+		{owner: "2147483647", want: Owner{2147483647, -1}},
+		{owner: "2147483648", err: "there is no user 2147483648"},
+		{owner: "1000", group: "2147483648", err: "there is no group 2147483648"},
 		{group: "docker", err: "group needs owner"},
 	} {
 		got, err := LookupOwner(context.Background(), ex, c.owner, c.group)
