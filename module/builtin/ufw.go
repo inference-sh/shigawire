@@ -44,11 +44,8 @@ func newUFW(env module.Env, a ufwArgs) (host.Resource, error) {
 	}
 	u := &host.UFW{Exec: env.Exec, Defaults: a.Default, Enabled: a.Enabled, Root: env.Root}
 	for _, r := range a.Rules {
-		state := r.State
-		if state == "" {
-			state = "present"
-		}
-		if err := oneOf("state", state, "present", "absent"); err != nil {
+		state, err := choice("state", r.State, "present", "absent")
+		if err != nil {
 			return nil, err
 		}
 		u.Rules = append(u.Rules, host.UFWRule{Action: r.Rule, Direction: r.Direction, Interface: r.Interface,

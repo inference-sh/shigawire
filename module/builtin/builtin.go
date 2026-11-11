@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/inference-sh/shigawire/host"
@@ -79,14 +80,16 @@ func required(kv ...string) error {
 	return nil
 }
 
-// oneOf checks that v is one of the allowed values.
-func oneOf(key, v string, allowed ...string) error {
-	for _, a := range allowed {
-		if v == a {
-			return nil
-		}
+// choice is the argument key's value v, one of allowed; "" is the first
+// of them, the default.
+func choice(key, v string, allowed ...string) (string, error) {
+	if v == "" {
+		return allowed[0], nil
 	}
-	return fmt.Errorf("%s %q: want %s", key, v, strings.Join(allowed, ", "))
+	if !slices.Contains(allowed, v) {
+		return "", fmt.Errorf("%s %q: want %s", key, v, strings.Join(allowed, ", "))
+	}
+	return v, nil
 }
 
 // Owner is a path's owner and group, by name or number, as the host's
@@ -134,10 +137,13 @@ func (o Owner) resolve(ctx context.Context, x host.Exec) (*host.Owner, error) {
 
 // owned is the resource make makes with the owner o names: made at Check,
 // when the play reaches it (the user may come from an earlier task), when
-// o names one.
-func owned(env module.Env, o Owner, id string, make func(*host.Owner) host.Resource) host.Resource {
+// o names one. An owner o cannot name is an error.
+func owned(env module.Env, o Owner, id string, make func(*host.Owner) host.Resource) (host.Resource, error) {
+	if err := o.check(); err != nil {
+		return nil, err
+	}
 	if o.Owner == "" {
-		return make(nil)
+		return make(nil), nil
 	}
 	return &host.Lazy{Name: id, Make: func(ctx context.Context) (host.Resource, error) {
 		own, err := o.resolve(ctx, env.Exec)
@@ -145,7 +151,7 @@ func owned(env module.Env, o Owner, id string, make func(*host.Owner) host.Resou
 			return nil, err
 		}
 		return make(own), nil
-	}}
+	}}, nil
 }
 
 // Register adds every standard module to r.

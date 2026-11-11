@@ -88,6 +88,11 @@ func TestCommand(t *testing.T) {
 	refuse(t, env, "command", map[string]any{"cmd": "x", "creates": "rel"}, "absolute")
 	refuse(t, env, "command", map[string]any{"cmd": "x", "env": map[string]any{"A B": "1"}}, "not a variable name")
 	refuse(t, env, "command", map[string]any{"cmd": "x", "timeout": 10}, "duration")
+	// A negative timeout is refused, not taken as none or as the default.
+	for _, m := range []string{"command", "query", "assert"} {
+		refuse(t, env, m, map[string]any{"cmd": "x", "timeout": "-1m"}, "want a positive duration")
+	}
+	refuse(t, env, "query", map[string]any{"cmd": "x", "chdir": "rel"}, "absolute")
 }
 
 func TestCompose(t *testing.T) {
