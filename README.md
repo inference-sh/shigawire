@@ -176,7 +176,7 @@ make test     # vet and tests
 make dist     # static binaries for linux/amd64 and linux/arm64
 ```
 
-Releases are built from `v*` tags.
+Releases: run the Release workflow on `dev` with a bump (patch, minor or major), from the Actions tab or `gh workflow run release.yml -f bump=minor`. It tests, tags the next version, builds the binaries and publishes them with checksums. Pushing a `v*` tag by hand releases that tag the same way.
 
 ## License
 

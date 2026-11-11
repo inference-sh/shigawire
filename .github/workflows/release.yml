@@ -1,52 +1,140 @@
 name: Release
 
-# A v* tag publishes the module (proxy.golang.org) and a GitHub release with
-# static shiga binaries and their checksums.
+# Run it from the Actions tab (or `gh workflow run release.yml -f bump=minor`):
+# it tests dev, tags the next version, builds static shiga binaries and
+# publishes them with checksums as a GitHub release. The tag also publishes
+# the Go module through proxy.golang.org.
+#
+# A v* tag pushed by hand releases that tag the same way. A tag the workflow
+# pushes itself does not start a second run (GITHUB_TOKEN pushes trigger no
+# workflows), so one run carries a release from test to publish.
 on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump"
+        required: true
+        type: choice
+        options: [patch, minor, major]
   push:
     tags: ["v*"]
 
 permissions:
   contents: read
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'push' && github.ref || 'dev' }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
       - run: go vet ./...
-      - run: go test ./...
+      - run: go test -race ./...
 
-  publish:
+  version:
     needs: test
     runs-on: ubuntu-latest
     permissions:
-      contents: write # gh release create
+      contents: write # push the tag
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      sha: ${{ steps.v.outputs.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'push' && github.ref || 'dev' }}
+          fetch-depth: 0
+      - name: Next version and tag
+        id: v
+        env:
+          EVENT: ${{ github.event_name }}
+          BUMP: ${{ inputs.bump }}
+        run: |
+          if [ "$EVENT" = push ]; then
+            VERSION="$GITHUB_REF_NAME"
+          else
+            # The highest vX.Y.Z tag in the repo; v0.0.0 before the first.
+            LAST=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+            LAST=${LAST:-v0.0.0}
+            IFS=. read -r MA MI PA <<< "${LAST#v}"
+            case "$BUMP" in
+              major) MA=$((MA+1)); MI=0; PA=0 ;;
+              minor) MI=$((MI+1)); PA=0 ;;
+              patch) PA=$((PA+1)) ;;
+            esac
+            VERSION="v$MA.$MI.$PA"
+            git tag "$VERSION"
+            git push origin "$VERSION"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "Releasing $VERSION at $(git rev-parse --short HEAD)"
+
+  build:
+    needs: version
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - {goos: linux, goarch: amd64}
+          - {goos: linux, goarch: arm64}
+          - {goos: darwin, goarch: amd64}
+          - {goos: darwin, goarch: arm64}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.version.outputs.sha }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
       - name: Build
         env:
           CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
         run: |
-          mkdir -p dist
-          for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
-            os=${t%/*} arch=${t#*/}
-            dir="shiga_${GITHUB_REF_NAME}_${os}_${arch}"
-            mkdir -p "dist/$dir"
-            GOOS=$os GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o "dist/$dir/shiga" ./cmd/shiga
-            cp LICENSE README.md "dist/$dir/"
-            tar -C dist -czf "dist/$dir.tar.gz" "$dir"
-          done
-          (cd dist && sha256sum *.tar.gz > checksums.txt)
-      - name: Warm Go module proxy
-        run: curl -sf "https://proxy.golang.org/github.com/inference-sh/shigawire/@v/${GITHUB_REF_NAME}.info" > /dev/null || true
-      - name: Create GitHub release
+          dir="shiga_${VERSION}_${GOOS}_${GOARCH}"
+          mkdir -p "dist/$dir"
+          go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o "dist/$dir/shiga" ./cmd/shiga
+          cp LICENSE README.md "dist/$dir/"
+          tar -C dist -czf "$dir.tar.gz" "$dir"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: shiga-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: "*.tar.gz"
+
+  publish:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # gh release create
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: shiga-*
+          merge-multiple: true
+      - name: Checksums
+        run: sha256sum *.tar.gz > checksums.txt
+      - name: GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes dist/*.tar.gz dist/checksums.txt
+        run: |
+          gh release create "$VERSION" -R "$GITHUB_REPOSITORY" --title "$VERSION" --generate-notes *.tar.gz checksums.txt
+      - name: Go module proxy
+        # Fetching the version makes proxy.golang.org (and pkg.go.dev) index
+        # it. A private repo is not reachable there: the step only warns.
+        run: |
+          curl -sf "https://proxy.golang.org/github.com/inference-sh/shigawire/@v/${VERSION}.info" \
+            || echo "::warning::proxy.golang.org could not fetch ${VERSION} (private repo?)"
