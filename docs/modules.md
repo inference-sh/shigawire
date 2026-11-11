@@ -377,7 +377,8 @@ A command for what no other module models (an installer, a one-time
 init). Without a guard it is an action: it runs every time and reports
 changed. A guard says when it has run already, and its drift says what
 the guard found: `no /usr/bin/docker` (`creates`), `/opt/x exists`
-(`removes`), or the last line `unless` printed, else its exit code. An
+(`removes`), or the last line `unless` printed, else its exit code
+(`unless: exit 1`). An
 `unless` that prints what is wrong (`echo "swarm $st: init"; exit 1`)
 makes the plan read that way. `shell` is another name for `command`; both
 run a string through `/bin/sh -c`.
