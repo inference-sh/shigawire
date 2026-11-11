@@ -8,13 +8,26 @@ import (
 	"strconv"
 )
 
-// Owner is a file's numeric owner and group.
+// Owner is a file's numeric owner and group. A resource's GID -1 leaves
+// the group as it is (chown with an owner and no group): a new path gets
+// the writer's.
 type Owner struct {
 	UID int `json:"uid"`
 	GID int `json:"gid"`
 }
 
-func (o Owner) String() string { return fmt.Sprintf("%d:%d", o.UID, o.GID) }
+func (o Owner) String() string {
+	if o.GID < 0 {
+		return strconv.Itoa(o.UID)
+	}
+	return fmt.Sprintf("%d:%d", o.UID, o.GID)
+}
+
+// has reports whether got, a path's owner, is o's: the group too, unless
+// o leaves it (GID -1).
+func (o Owner) has(got Owner) bool {
+	return got.UID == o.UID && (o.GID < 0 || got.GID == o.GID)
+}
 
 // UserOwner is u and u's primary group.
 func UserOwner(u *user.User) (Owner, error) {
@@ -44,7 +57,10 @@ func (a attrs) drift(fi fs.FileInfo) []string {
 	if got := fi.Mode().Perm(); a.mode != 0 && got != a.mode.Perm() {
 		d = append(d, fmt.Sprintf("mode %04o, want %04o", got, a.mode.Perm()))
 	}
-	if got, ok := FileOwner(fi); a.owner != nil && ok && got != *a.owner {
+	if got, ok := FileOwner(fi); a.owner != nil && ok && !a.owner.has(got) {
+		if a.owner.GID < 0 {
+			got.GID = -1
+		}
 		d = append(d, "owner "+got.String()+", want "+a.owner.String())
 	}
 	return d
@@ -72,8 +88,10 @@ func (a attrs) forNew(fi fs.FileInfo, def fs.FileMode) (fs.FileMode, *Owner) {
 		if mode == 0 {
 			mode = fi.Mode().Perm()
 		}
-		if o, ok := FileOwner(fi); owner == nil && ok {
+		if o, ok := FileOwner(fi); ok && owner == nil {
 			owner = &o
+		} else if ok && owner.GID < 0 {
+			owner = &Owner{UID: owner.UID, GID: o.GID}
 		}
 	}
 	if mode == 0 {

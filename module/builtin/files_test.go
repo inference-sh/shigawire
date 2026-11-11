@@ -3,6 +3,8 @@ package builtin_test
 import (
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 	"testing"
 	"testing/fstest"
 
@@ -166,5 +168,31 @@ func TestFileArgsEmbedded(t *testing.T) {
 	}
 	if a.Name != "x" || a.Content == nil || *a.Content != "hi\n" || a.Mode != 0o600 || !a.Parents {
 		t.Fatalf("%+v", a)
+	}
+}
+
+// A numeric owner or group with no entry in the user database is a uid or
+// gid as it is (chown's rule), on a simulated host: here the test's own
+// uid, which the sim's database lacks. An owner with no group leaves the
+// group as it is. A name that is not there is still an error.
+func TestNumericOwner(t *testing.T) {
+	h, env := simHost(t)
+	delete(h.Users, "root") // the sim's root is the test's uid
+	uid, gid := strconv.Itoa(os.Getuid()), strconv.Itoa(os.Getgid())
+	delete(h.Groups, "root")
+	for _, g := range []string{"adm", "sudo", "users", "systemd-journal", "www-data"} {
+		delete(h.Groups, g)
+	}
+	hosttest.Converge(t, build(t, env, "dir", map[string]any{"path": "/srv/data", "owner": uid}), host.Changed)
+	hosttest.Converge(t, build(t, env, "file", map[string]any{"path": "/srv/data/f", "content": "x", "owner": uid, "group": gid}), host.Changed)
+	// A second run of the same owner reads ok: the ids compare as numbers.
+	hosttest.Converge(t, build(t, env, "dir", map[string]any{"path": "/srv/data", "owner": uid, "group": gid, "mode": "0750"}), host.Changed)
+	r := build(t, env, "dir", map[string]any{"path": "/srv/data", "owner": "ghost"})
+	if got, err := play(hosttest.Apply, host.Task{Resource: r}); err == nil || !strings.Contains(err.Error(), "there is no user ghost") {
+		t.Fatalf("%v %v", hosttest.Statuses(got), err)
+	}
+	r = build(t, env, "dir", map[string]any{"path": "/srv/data", "owner": uid, "group": "ghosts"})
+	if got, err := play(hosttest.Apply, host.Task{Resource: r}); err == nil || !strings.Contains(err.Error(), "there is no group ghosts") {
+		t.Fatalf("%v %v", hosttest.Statuses(got), err)
 	}
 }

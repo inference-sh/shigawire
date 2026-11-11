@@ -156,7 +156,7 @@ func (t *OwnTree) open() (int, unix.Stat_t, error) {
 }
 
 func (t *OwnTree) owned(st *unix.Stat_t) bool {
-	return int(st.Uid) == t.Owner.UID && int(st.Gid) == t.Owner.GID
+	return t.Owner.has(Owner{UID: int(st.Uid), GID: int(st.Gid)})
 }
 
 // leave: a file with another hard link, without protected_hardlinks.

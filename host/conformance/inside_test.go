@@ -380,6 +380,26 @@ func (h *box) cases() []tcase {
 			present: func() error { return h.modeOwner("/srv/shiga-conformance/a/b", fs.ModeDir|0o750, owner) },
 		},
 		{
+			// A container's uid, with no passwd entry: the number as it
+			// is, and with no group the group left as it is (root's, the
+			// writer's). The file gets the gid too.
+			name:  "dir/numeric-owner",
+			setup: func(t *testing.T) { h.sh(t, "rm -rf /srv/shiga-uid && ! getent passwd 65532 && ! getent group 65533") },
+			play: func(*host.Apt) host.Play {
+				return tasks(&host.Lazy{Name: "dir /srv/shiga-uid", Make: func(ctx context.Context) (host.Resource, error) {
+					own, err := host.LookupOwner(ctx, h.x, "65532", "")
+					return &host.Dir{Path: "/srv/shiga-uid", Mode: 0o750, Owner: own}, err
+				}}, &host.Lazy{Name: "file /srv/shiga-uid/f", Make: func(ctx context.Context) (host.Resource, error) {
+					own, err := host.LookupOwner(ctx, h.x, "65532", "65533")
+					return &host.File{Path: "/srv/shiga-uid/f", Content: []byte("x\n"), Mode: 0o640, Owner: own}, err
+				}})
+			},
+			present: func() error {
+				return errors.Join(h.modeOwner("/srv/shiga-uid", fs.ModeDir|0o750, host.Owner{UID: 65532, GID: 0}),
+					h.fileIs("/srv/shiga-uid/f", "x\n", 0o640, host.Owner{UID: 65532, GID: 65533}))
+			},
+		},
+		{
 			name:    "absent",
 			setup:   func(t *testing.T) { h.sh(t, "mkdir -p /etc/shiga-conformance && touch /etc/shiga-conformance/gone") },
 			play:    func(*host.Apt) host.Play { return tasks(&host.Absent{Path: "/etc/shiga-conformance/gone"}) },

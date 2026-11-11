@@ -33,6 +33,64 @@ func LookupPasswd(ctx context.Context, x Exec, name string) (*Passwd, error) {
 	return &Passwd{Name: f[0], UID: uid, GID: gid, Comment: f[4], Home: f[5], Shell: f[6]}, nil
 }
 
+// LookupOwner is the owner and group a path gets for owner and group, by
+// name or number, as the user database (getent) has them. An owner with
+// no group gives the owner's primary group. A number with no entry is
+// that uid or gid as it is (chown's rule: a container's uid has none),
+// and an owner number with no entry and no group leaves the group as it
+// is (GID -1). A name with no entry is an error. Owner "" is nil; a
+// group with no owner is an error.
+func LookupOwner(ctx context.Context, x Exec, owner, group string) (*Owner, error) {
+	switch {
+	case owner == "" && group != "":
+		return nil, errors.New("group needs owner")
+	case owner == "":
+		return nil, nil
+	}
+	p, err := LookupPasswd(ctx, x, owner)
+	if err != nil {
+		return nil, err
+	}
+	own := &Owner{GID: -1}
+	switch id, ok := numericID(owner); {
+	case p != nil:
+		own.UID, own.GID = p.UID, p.GID
+	case ok:
+		own.UID = id
+	default:
+		return nil, fmt.Errorf("there is no user %s", owner)
+	}
+	if group == "" {
+		return own, nil
+	}
+	g, err := LookupGroup(ctx, x, group)
+	if err != nil {
+		return nil, err
+	}
+	switch id, ok := numericID(group); {
+	case g != nil:
+		own.GID = g.GID
+	case ok:
+		own.GID = id
+	default:
+		return nil, fmt.Errorf("there is no group %s", group)
+	}
+	return own, nil
+}
+
+// numericID is s as a uid or gid: digits only, below 2^32-1 (-1 as a
+// 32-bit id means none).
+func numericID(s string) (int, bool) {
+	if s == "" || strings.Trim(s, "0123456789") != "" {
+		return 0, false
+	}
+	n, err := strconv.ParseUint(s, 10, 32)
+	if err != nil || n == 1<<32-1 {
+		return 0, false
+	}
+	return int(n), true
+}
+
 // getent is key's entry in the database db (passwd, group, shadow) as
 // getent has it, split at its colons: an entry without that many fields
 // is an error. It is nil when there is none.

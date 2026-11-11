@@ -93,9 +93,10 @@ func choice(key, v string, allowed ...string) (string, error) {
 }
 
 // Owner is a path's owner and group, by name or number, as the host's
-// user database has them (getent). An owner with no group gives the
-// owner's primary group; a group with no owner is refused (host.Owner
-// sets both).
+// user database has them (host.LookupOwner): a number with no entry is
+// that id. An owner with no group gives the owner's primary group (a
+// number with no entry leaves the group as it is); a group with no owner
+// is refused.
 type Owner struct {
 	Owner string `yaml:"owner"`
 	Group string `yaml:"group"`
@@ -108,31 +109,10 @@ func (o Owner) check() error {
 	return nil
 }
 
-// resolve reads the owner's and group's ids; nil when no owner is set.
+// resolve reads the owner's and group's ids (host.LookupOwner); nil when
+// no owner is set.
 func (o Owner) resolve(ctx context.Context, x host.Exec) (*host.Owner, error) {
-	if o.Owner == "" {
-		return nil, nil
-	}
-	ctx = host.Aside(ctx)
-	p, err := host.LookupPasswd(ctx, x, o.Owner)
-	if err != nil {
-		return nil, err
-	}
-	if p == nil {
-		return nil, fmt.Errorf("there is no user %s", o.Owner)
-	}
-	own := &host.Owner{UID: p.UID, GID: p.GID}
-	if o.Group != "" {
-		g, err := host.LookupGroup(ctx, x, o.Group)
-		if err != nil {
-			return nil, err
-		}
-		if g == nil {
-			return nil, fmt.Errorf("there is no group %s", o.Group)
-		}
-		own.GID = g.GID
-	}
-	return own, nil
+	return host.LookupOwner(host.Aside(ctx), x, o.Owner, o.Group)
 }
 
 // owned is the resource make makes with the owner o names: made at Check,

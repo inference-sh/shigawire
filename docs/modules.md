@@ -42,8 +42,12 @@ Rules for every module:
 - A command (`cmd`, `unless`, `validate`, `then`) is a string, run by
   `/bin/sh -c`, or a list, run as it is with the first item the program.
 - `owner` and `group` take a name or a number, read from the host's user
-  database (`getent`) when the task runs. An owner with no group gives
-  the owner's primary group. A group with no owner is refused.
+  database (`getent`) when the task runs. A number with no entry there is
+  that uid or gid as it is, as chown takes it (`owner: 65532`, a
+  container's user). A name with no entry is an error. An owner with no
+  group gives the owner's primary group; an owner number with no entry
+  and no group leaves the group as it is (a new path gets root's). A
+  group with no owner is refused.
 - A list argument (`name`, `groups`, `uris`, ...) also takes a single
   string.
 - `state` defaults to `present` where a module has one.
