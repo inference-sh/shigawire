@@ -336,7 +336,7 @@ func TestWhen(t *testing.T) {
 		t.Fatal(r.Name)
 	}
 	// An action stays one through When.
-	w.Resource = &Restart{Exec: &fakeExec{}, Name: "x"}
+	w.Resource = &Always{Why: "x"}
 	if st, _ := w.Check(context.Background()); !st.Action {
 		t.Fatal("When hides the action")
 	}
