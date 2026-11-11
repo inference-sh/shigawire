@@ -14,9 +14,9 @@ func docker(args ...string) Cmd {
 	return Cmd{Name: "docker", Args: args, Timeout: 5 * time.Minute}
 }
 
-// SwarmState is the node's swarm state as docker info has it: inactive,
+// swarmState is the node's swarm state as docker info has it: inactive,
 // pending, active, error or locked.
-func SwarmState(ctx context.Context, x Exec) (string, error) {
+func swarmState(ctx context.Context, x Exec) (string, error) {
 	o, err := run(ctx, x, docker("info", "--format", "{{.Swarm.LocalNodeState}}"))
 	if err != nil {
 		return "", fmt.Errorf("docker info: %w", err)
@@ -55,7 +55,7 @@ func (s *Swarm) Check(ctx context.Context) (State, error) {
 	if s.Join && (s.JoinToken == "" || len(s.RemoteAddrs) == 0) {
 		return State{}, errors.New("docker swarm join needs a token and a manager's address")
 	}
-	st, err := SwarmState(ctx, s.Exec)
+	st, err := swarmState(ctx, s.Exec)
 	if err != nil {
 		return State{}, err
 	}
@@ -95,7 +95,7 @@ func (s *Swarm) Apply(ctx context.Context, st State) (Result, error) {
 		// Not o.Err: its message may hold the command line, and the token.
 		return Result{}, fmt.Errorf("docker swarm %s: exit %d: %s", args[1], o.Code, LastLines(o.Out, 2))
 	}
-	got, err := SwarmState(ctx, s.Exec)
+	got, err := swarmState(ctx, s.Exec)
 	if err != nil {
 		return Result{}, err
 	}
@@ -201,29 +201,24 @@ func (c *Compose) Check(ctx context.Context) (State, error) {
 	if err != nil {
 		return State{}, err
 	}
-	var d []string
-	add := func(s string) {
-		if !slices.Contains(d, s) { // one line for a service's replicas
-			d = append(d, s)
-		}
-	}
+	var d []string // one line for a service's replicas
 	for _, l := range strings.Split(strings.TrimSpace(o.Out), "\n") {
 		svc, hash, ok := strings.Cut(strings.TrimSpace(l), " ")
 		if !ok {
 			continue
 		}
 		if !slices.ContainsFunc(cs, func(k composeContainer) bool { return k.Service == svc }) {
-			add(svc + " not created")
+			d = appendNew(d, svc+" not created")
 			continue
 		}
 		for _, k := range cs {
 			switch {
 			case k.Service != svc:
 			case k.label("com.docker.compose.config-hash") != hash:
-				add(svc + " config changed")
+				d = appendNew(d, svc+" config changed")
 			case k.State == "running", k.State == "exited" && k.ExitCode == 0:
 			default:
-				add(svc + " " + k.State)
+				d = appendNew(d, svc+" "+k.State)
 			}
 		}
 	}

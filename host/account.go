@@ -7,7 +7,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // Passwd is a user's entry in the system's user database.
@@ -22,20 +21,9 @@ type Passwd struct {
 // LookupPasswd is name's entry as getent passwd has it (NSS: /etc/passwd,
 // LDAP), nil when there is none.
 func LookupPasswd(ctx context.Context, x Exec, name string) (*Passwd, error) {
-	o := x.Run(ctx, Cmd{Name: "getent", Args: []string{"passwd", name}, Timeout: time.Minute})
-	if o.Code == 2 { // getent: key not found
-		return nil, nil
-	}
-	if o.Err != nil {
-		return nil, fmt.Errorf("getent passwd %s: %w", name, o.Err)
-	}
-	return parsePasswd(o.Out)
-}
-
-func parsePasswd(line string) (*Passwd, error) {
-	f := strings.Split(strings.TrimSpace(line), ":")
-	if len(f) != 7 {
-		return nil, fmt.Errorf("getent passwd: %q is not a passwd entry", strings.TrimSpace(line))
+	f, err := getent(ctx, x, "passwd", name, 7)
+	if f == nil || err != nil {
+		return nil, err
 	}
 	uid, err1 := strconv.Atoi(f[2])
 	gid, err2 := strconv.Atoi(f[3])
@@ -43,6 +31,25 @@ func parsePasswd(line string) (*Passwd, error) {
 		return nil, fmt.Errorf("getent passwd %s: %w", f[0], err)
 	}
 	return &Passwd{Name: f[0], UID: uid, GID: gid, Comment: f[4], Home: f[5], Shell: f[6]}, nil
+}
+
+// getent is key's entry in the database db (passwd, group, shadow) as
+// getent has it, split at its colons: an entry without that many fields
+// is an error. It is nil when there is none.
+func getent(ctx context.Context, x Exec, db, key string, fields int) ([]string, error) {
+	o := x.Run(ctx, short("getent", db, key))
+	if o.Code == 2 { // getent: key not found
+		return nil, nil
+	}
+	if o.Err != nil {
+		return nil, fmt.Errorf("getent %s %s: %w", db, key, o.Err)
+	}
+	line := strings.TrimSpace(o.Out)
+	f := strings.Split(line, ":")
+	if len(f) != fields {
+		return nil, fmt.Errorf("getent %s: %q is not a %s entry", db, line, db)
+	}
+	return f, nil
 }
 
 // GroupEntry is a group's entry in the system's group database.
@@ -55,16 +62,9 @@ type GroupEntry struct {
 // LookupGroup is name's entry as getent group has it (NSS: /etc/group,
 // LDAP), nil when there is none. A number names a group by its GID.
 func LookupGroup(ctx context.Context, x Exec, name string) (*GroupEntry, error) {
-	o := x.Run(ctx, Cmd{Name: "getent", Args: []string{"group", name}, Timeout: time.Minute})
-	if o.Code == 2 { // getent: key not found
-		return nil, nil
-	}
-	if o.Err != nil {
-		return nil, fmt.Errorf("getent group %s: %w", name, o.Err)
-	}
-	f := strings.Split(strings.TrimSpace(o.Out), ":")
-	if len(f) != 4 {
-		return nil, fmt.Errorf("getent group: %q is not a group entry", strings.TrimSpace(o.Out))
+	f, err := getent(ctx, x, "group", name, 4)
+	if f == nil || err != nil {
+		return nil, err
 	}
 	gid, err := strconv.Atoi(f[2])
 	if err != nil {
@@ -75,10 +75,6 @@ func LookupGroup(ctx context.Context, x Exec, name string) (*GroupEntry, error) 
 		g.Members = strings.Split(f[3], ",")
 	}
 	return g, nil
-}
-
-func account(name string, args ...string) Cmd {
-	return Cmd{Name: name, Args: args, Timeout: time.Minute}
 }
 
 // Group is a group in the system's group database, made with groupadd
@@ -110,7 +106,7 @@ func (g *Group) Check(ctx context.Context) (State, error) {
 	case e == nil && g.Absent:
 		return inPlace()
 	case g.Absent:
-		return driftData(account("groupdel", g.Name), "remove")
+		return driftData([]Cmd{short("groupdel", g.Name)}, "remove")
 	case e == nil:
 		args := []string{}
 		if g.System {
@@ -119,19 +115,14 @@ func (g *Group) Check(ctx context.Context) (State, error) {
 		if g.GID != 0 {
 			args = append(args, "--gid", strconv.Itoa(g.GID))
 		}
-		return driftData(account("groupadd", append(args, g.Name)...), "create")
+		return driftData([]Cmd{short("groupadd", append(args, g.Name)...)}, "create")
 	case g.GID != 0 && e.GID != g.GID:
-		return driftData(account("groupmod", "--gid", strconv.Itoa(g.GID), g.Name), "gid %d, want %d", e.GID, g.GID)
+		return driftData([]Cmd{short("groupmod", "--gid", strconv.Itoa(g.GID), g.Name)}, "gid %d, want %d", e.GID, g.GID)
 	}
 	return inPlace()
 }
 
-func (g *Group) Apply(ctx context.Context, st State) (Result, error) {
-	if _, err := run(ctx, g.Exec, st.Data.(Cmd)); err != nil {
-		return Result{}, err
-	}
-	return changed("%s", st.Drift)
-}
+func (g *Group) Apply(ctx context.Context, st State) (Result, error) { return runCmds(ctx, g.Exec, st) }
 
 // User is a user in the system's user database, made with useradd when
 // missing and put right with usermod, or not there (Absent: removed with
@@ -180,9 +171,9 @@ func (u *User) Check(ctx context.Context) (State, error) {
 	case p == nil && u.Absent:
 		return inPlace()
 	case u.Absent:
-		return driftData(account("userdel", u.Name), "remove")
+		return driftData([]Cmd{short("userdel", u.Name)}, "remove")
 	case p == nil:
-		return driftData(account("useradd", u.addArgs()...), "create")
+		return driftData([]Cmd{short("useradd", u.addArgs()...)}, "create")
 	}
 	var args, d []string
 	if u.UID != 0 && p.UID != u.UID {
@@ -222,7 +213,7 @@ func (u *User) Check(ctx context.Context) (State, error) {
 		}
 	}
 	if len(u.Groups) > 0 {
-		o, err := run(ctx, u.Exec, account("id", "-nG", u.Name))
+		o, err := run(ctx, u.Exec, short("id", "-nG", u.Name))
 		if err != nil {
 			return State{}, fmt.Errorf("the groups of %s: %w", u.Name, err)
 		}
@@ -241,7 +232,7 @@ func (u *User) Check(ctx context.Context) (State, error) {
 	if len(args) == 0 {
 		return inPlace()
 	}
-	return driftData(account("usermod", append(args, u.Name)...), "%s", strings.Join(d, "; "))
+	return driftData([]Cmd{short("usermod", append(args, u.Name)...)}, "%s", strings.Join(d, "; "))
 }
 
 func (u *User) addArgs() []string {
@@ -276,20 +267,14 @@ func (u *User) addArgs() []string {
 
 // shadowPassword is the password field of name's shadow entry.
 func shadowPassword(ctx context.Context, x Exec, name string) (string, error) {
-	o, err := run(ctx, x, Cmd{Name: "getent", Args: []string{"shadow", name}, Timeout: time.Minute})
-	if err != nil {
-		return "", fmt.Errorf("the shadow entry of %s: %w", name, err)
-	}
-	f := strings.Split(strings.TrimSpace(o.Out), ":")
-	if len(f) < 2 || f[0] != name {
-		return "", fmt.Errorf("getent shadow: %q is not a shadow entry", strings.TrimSpace(o.Out))
+	f, err := getent(ctx, x, "shadow", name, 9)
+	switch {
+	case err != nil:
+		return "", err
+	case f == nil:
+		return "", fmt.Errorf("there is no shadow entry for %s", name)
 	}
 	return f[1], nil
 }
 
-func (u *User) Apply(ctx context.Context, st State) (Result, error) {
-	if _, err := run(ctx, u.Exec, st.Data.(Cmd)); err != nil {
-		return Result{}, err
-	}
-	return changed("%s", st.Drift)
-}
+func (u *User) Apply(ctx context.Context, st State) (Result, error) { return runCmds(ctx, u.Exec, st) }

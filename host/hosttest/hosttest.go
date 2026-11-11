@@ -10,7 +10,6 @@ package hosttest
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -74,10 +73,7 @@ func (f *Exec) Run(_ context.Context, c host.Cmd) host.Output {
 		o = respondCmd(c)
 	}
 	if o.Code != 0 && o.Err == nil {
-		o.Err = fmt.Errorf("%s: exit %d", c.Name, o.Code)
-		if out := host.LastLines(o.Out, 2); out != "" {
-			o.Err = fmt.Errorf("%s: exit %d: %s", c.Name, o.Code, out)
-		}
+		o.Err = host.ExitError(c.Name, o.Code, o.Out)
 	}
 	return o
 }

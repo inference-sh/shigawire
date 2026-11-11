@@ -2,7 +2,6 @@ package host
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"testing"
 )
@@ -26,10 +25,7 @@ func (f *fakeExec) Run(_ context.Context, c Cmd) Output {
 	}
 	o := f.respond(line)
 	if o.Code != 0 && o.Err == nil {
-		o.Err = fmt.Errorf("%s: exit %d", c.Name, o.Code)
-		if out := LastLines(o.Out, 2); out != "" {
-			o.Err = fmt.Errorf("%s: exit %d: %s", c.Name, o.Code, out)
-		}
+		o.Err = ExitError(c.Name, o.Code, o.Out)
 	}
 	return o
 }

@@ -22,7 +22,6 @@ package module
 import (
 	"fmt"
 	"io/fs"
-	"path/filepath"
 	"reflect"
 	"slices"
 	"sync"
@@ -52,12 +51,7 @@ type Env struct {
 }
 
 // Path is the host path p under Root.
-func (e Env) Path(p string) string {
-	if e.Root == "" || e.Root == "/" {
-		return p
-	}
-	return filepath.Join(e.Root, p)
-}
+func (e Env) Path(p string) string { return host.UnderRoot(e.Root, p) }
 
 // Ctor makes a module's resource from a task's arguments.
 type Ctor func(env Env, args map[string]any) (host.Resource, error)

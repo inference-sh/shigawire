@@ -122,7 +122,7 @@ func (e OSExec) Run(ctx context.Context, c Cmd) Output {
 		// output open.
 	case errors.As(err, &exitErr):
 		o.Code = exitErr.ExitCode()
-		o.Err = fmt.Errorf("%s: exit %d: %s", c.Name, o.Code, LastLines(o.Out, 2))
+		o.Err = ExitError(c.Name, o.Code, o.Out)
 	default:
 		o.Code, o.Err = -1, err
 	}
@@ -148,6 +148,22 @@ func (e OSExec) LookPath(name string) (string, error) {
 	return "", fmt.Errorf("%s: %w in %s", name, fs.ErrNotExist, e.Path)
 }
 
+// ExitError is the error of a command name that exited code, having
+// printed out: its last lines go in the message. OSExec sets it, and so
+// do fake Execs, so a test sees the error a host gives.
+func ExitError(name string, code int, out string) error {
+	if last := LastLines(out, 2); last != "" {
+		return fmt.Errorf("%s: exit %d: %s", name, code, last)
+	}
+	return fmt.Errorf("%s: exit %d", name, code)
+}
+
+// short is a command expected to finish soon (a lookup, useradd): it is
+// killed after a minute.
+func short(name string, args ...string) Cmd {
+	return Cmd{Name: name, Args: args, Timeout: time.Minute}
+}
+
 // run runs c and makes a failure an error. An Exec sets Err for every
 // failure (OSExec's names the exit and the output's last lines).
 func run(ctx context.Context, e Exec, c Cmd) (Output, error) {
@@ -155,8 +171,38 @@ func run(ctx context.Context, e Exec, c Cmd) (Output, error) {
 	return o, o.Err
 }
 
-// Tail is the last n non-empty lines of out.
-func Tail(out string, n int) []string {
+// cmdPlan is what a resource's Check found to do: the commands that put
+// it in place, each with what it does.
+type cmdPlan struct {
+	cmds  []Cmd
+	drift []string
+}
+
+func (p *cmdPlan) add(c Cmd, why string) {
+	p.cmds, p.drift = append(p.cmds, c), append(p.drift, why)
+}
+
+// state is in place when there is nothing to run, else drift whose Data
+// is the commands (runCmds runs them).
+func (p *cmdPlan) state() (State, error) {
+	if len(p.cmds) == 0 {
+		return inPlace()
+	}
+	return driftData(p.cmds, "%s", strings.Join(p.drift, "; "))
+}
+
+// runCmds runs the commands a cmdPlan's state holds, in order.
+func runCmds(ctx context.Context, x Exec, st State) (Result, error) {
+	for _, c := range st.Data.([]Cmd) {
+		if _, err := run(ctx, x, c); err != nil {
+			return Result{}, err
+		}
+	}
+	return changed("%s", st.Drift)
+}
+
+// tail is the last n non-empty lines of out.
+func tail(out string, n int) []string {
 	var lines []string
 	for _, l := range strings.Split(out, "\n") {
 		if l = strings.TrimRight(l, " \r\t"); strings.TrimSpace(l) != "" {
@@ -170,4 +216,4 @@ func Tail(out string, n int) []string {
 }
 
 // LastLines is the last n non-empty lines of out, joined with " | ".
-func LastLines(out string, n int) string { return strings.Join(Tail(out, n), " | ") }
+func LastLines(out string, n int) string { return strings.Join(tail(out, n), " | ") }

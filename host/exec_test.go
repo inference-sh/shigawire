@@ -22,6 +22,10 @@ func TestOSExec(t *testing.T) {
 	if o.OK() || o.Code != 3 || o.Err.Error() != "sh: exit 3: one | two" {
 		t.Fatalf("%+v", o)
 	}
+	// No output: the error ends at the exit, as the fakes' does.
+	if o = e.Run(ctx, Cmd{Name: "sh", Args: []string{"-c", "exit 4"}}); o.Err.Error() != "sh: exit 4" {
+		t.Fatalf("%q", o.Err)
+	}
 	o = e.Run(ctx, Cmd{Name: "sleep", Args: []string{"5"}, Timeout: 50 * time.Millisecond})
 	if o.Code != -1 || !strings.Contains(o.Err.Error(), "timed out after 50ms") {
 		t.Fatalf("%+v", o)

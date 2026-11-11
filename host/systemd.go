@@ -1,10 +1,8 @@
 package host
 
 import (
-	"cmp"
 	"context"
 	"fmt"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -13,7 +11,8 @@ import (
 // systemctlTimeout bounds one systemctl call (a unit's start included).
 const systemctlTimeout = 5 * time.Minute
 
-func systemctl(args ...string) Cmd {
+// Systemctl is systemctl with args, killed after systemctlTimeout.
+func Systemctl(args ...string) Cmd {
 	return Cmd{Name: "systemctl", Args: args, Timeout: systemctlTimeout}
 }
 
@@ -72,32 +71,19 @@ func (s *Service) unitPath() string {
 }
 
 func (s *Service) unitFile() *File {
-	return &File{Path: filepath.Join(cmp.Or(s.Root, "/"), s.unitPath()), Content: s.Unit, Mode: 0o644, Parents: true}
+	return &File{Path: UnderRoot(s.Root, s.unitPath()), Content: s.Unit, Mode: 0o644, Parents: true}
 }
 
 // enabledStates are the UnitFileStates is-enabled exits 0 for: enabled,
 // or a unit that cannot be (static, alias, indirect, generated).
 var enabledStates = []string{"enabled", "enabled-runtime", "static", "alias", "indirect", "generated", "transient"}
 
-// ShowProps is one unit's properties as systemctl show prints them
-// (Key=Value lines).
-func ShowProps(out string) map[string]string {
-	kv := map[string]string{}
-	for _, l := range strings.Split(out, "\n") {
-		if k, v, ok := strings.Cut(strings.TrimSpace(l), "="); ok {
-			kv[k] = v
-		}
-	}
-	return kv
-}
-
 // serviceTodo is what Service.Check found to do: the unit file to write
 // (nil: none) and the systemctl calls, with what they do.
 type serviceTodo struct {
 	file   *File
 	fileSt State
-	cmds   []Cmd
-	drift  []string
+	cmdPlan
 }
 
 func (s *Service) todo(ctx context.Context) (*serviceTodo, error) {
@@ -116,11 +102,11 @@ func (s *Service) todo(ctx context.Context) (*serviceTodo, error) {
 			t.drift = append(t.drift, "unit file: "+st.Drift)
 		}
 	}
-	o, err := run(ctx, s.Exec, systemctl("show", "-p", "UnitFileState", "-p", "ActiveState", s.Name))
+	o, err := run(ctx, s.Exec, Systemctl("show", "-p", "UnitFileState", "-p", "ActiveState", s.Name))
 	if err != nil {
 		return nil, err
 	}
-	kv := ShowProps(o.Out)
+	kv := parseKV([]byte(o.Out))
 	ufs, as := kv["UnitFileState"], kv["ActiveState"]
 	active := as == "active" || as == "reloading"
 	enable := s.Enabled && !slices.Contains(enabledStates, ufs)
@@ -129,16 +115,16 @@ func (s *Service) todo(ctx context.Context) (*serviceTodo, error) {
 	stop := s.Stopped && (active || as == "activating")
 	switch {
 	case enable && start:
-		t.cmds, t.drift = append(t.cmds, systemctl("enable", "--now", s.Name)), append(t.drift, "enable and start")
+		t.add(Systemctl("enable", "--now", s.Name), "enable and start")
 	case disable && stop:
-		t.cmds, t.drift = append(t.cmds, systemctl("disable", "--now", s.Name)), append(t.drift, "disable and stop")
+		t.add(Systemctl("disable", "--now", s.Name), "disable and stop")
 	default:
 		for _, c := range []struct {
 			do   bool
 			verb string
 		}{{enable, "enable"}, {disable, "disable"}, {start, "start"}, {stop, "stop"}} {
 			if c.do {
-				t.cmds, t.drift = append(t.cmds, systemctl(c.verb, s.Name)), append(t.drift, c.verb)
+				t.add(Systemctl(c.verb, s.Name), c.verb)
 			}
 		}
 	}
@@ -163,16 +149,20 @@ func (s *Service) Apply(ctx context.Context, st State) (Result, error) {
 		if _, err := t.file.Apply(ctx, t.fileSt); err != nil {
 			return Result{}, err
 		}
-		if _, err := run(ctx, s.Exec, systemctl("daemon-reload")); err != nil {
+		if _, err := run(ctx, s.Exec, Systemctl("daemon-reload")); err != nil {
 			return Result{}, err
 		}
 	}
-	for _, c := range t.cmds {
-		if _, err := run(ctx, s.Exec, c); err != nil {
-			return Result{}, err
-		}
+	return runCmds(ctx, s.Exec, State{Drift: st.Drift, Data: t.cmds})
+}
+
+// systemctlAction runs systemctl with args, for an action's Apply, and
+// says done.
+func systemctlAction(ctx context.Context, x Exec, done string, args ...string) (Result, error) {
+	if _, err := run(ctx, x, Systemctl(args...)); err != nil {
+		return Result{}, err
 	}
-	return changed("%s", st.Drift)
+	return changed("%s", done)
 }
 
 // Restart restarts a unit (or starts a stopped one). It is an action, for
@@ -185,10 +175,7 @@ type Restart struct {
 func (r *Restart) ID() string                           { return "restart " + r.Name }
 func (r *Restart) Check(context.Context) (State, error) { return action("restart") }
 func (r *Restart) Apply(ctx context.Context, _ State) (Result, error) {
-	if _, err := run(ctx, r.Exec, systemctl("restart", r.Name)); err != nil {
-		return Result{}, err
-	}
-	return changed("restarted")
+	return systemctlAction(ctx, r.Exec, "restarted", "restart", r.Name)
 }
 
 // Reload makes a unit read its config again (systemctl reload). It is an
@@ -201,10 +188,7 @@ type Reload struct {
 func (r *Reload) ID() string                           { return "reload " + r.Name }
 func (r *Reload) Check(context.Context) (State, error) { return action("reload") }
 func (r *Reload) Apply(ctx context.Context, _ State) (Result, error) {
-	if _, err := run(ctx, r.Exec, systemctl("reload", r.Name)); err != nil {
-		return Result{}, err
-	}
-	return changed("reloaded")
+	return systemctlAction(ctx, r.Exec, "reloaded", "reload", r.Name)
 }
 
 // DaemonReload makes systemd read its units (and fstab's) again. It is an
@@ -216,8 +200,5 @@ type DaemonReload struct {
 func (d *DaemonReload) ID() string                           { return "systemd daemon-reload" }
 func (d *DaemonReload) Check(context.Context) (State, error) { return action("reload") }
 func (d *DaemonReload) Apply(ctx context.Context, _ State) (Result, error) {
-	if _, err := run(ctx, d.Exec, systemctl("daemon-reload")); err != nil {
-		return Result{}, err
-	}
-	return changed("reloaded")
+	return systemctlAction(ctx, d.Exec, "reloaded", "daemon-reload")
 }
