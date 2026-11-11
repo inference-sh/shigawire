@@ -22,8 +22,8 @@ func registerFiles(r *module.Registry) {
 	register(r, module.Typed(newBlock), "block", "blockinfile")
 }
 
-// FileArgs are what file writes, beside its path.
-type FileArgs struct {
+// writeArgs are what file writes, beside its path.
+type writeArgs struct {
 	// Content is the file's content; Src names a file to copy instead.
 	// A relative Src is under the playbook's files/ directory (Env.Files),
 	// read when the task is loaded; an absolute one is a file on the host,
@@ -44,17 +44,17 @@ type FileArgs struct {
 }
 
 type fileArgs struct {
-	Path     string `yaml:"path"`
-	FileArgs `yaml:",inline"`
+	Path      string `yaml:"path"`
+	writeArgs `yaml:",inline"`
 }
 
 // copyArgs are file's, with Ansible copy's dest for the path.
 type copyArgs struct {
-	Dest     string `yaml:"dest"`
-	FileArgs `yaml:",inline"`
+	Dest      string `yaml:"dest"`
+	writeArgs `yaml:",inline"`
 }
 
-func fileResource(env module.Env, key, path string, a FileArgs) (host.Resource, error) {
+func fileResource(env module.Env, key, path string, a writeArgs) (host.Resource, error) {
 	if err := absPath(key, path); err != nil {
 		return nil, err
 	}
@@ -101,11 +101,11 @@ func readFiles(env module.Env, src string) ([]byte, error) {
 }
 
 func newFile(env module.Env, a fileArgs) (host.Resource, error) {
-	return fileResource(env, "path", a.Path, a.FileArgs)
+	return fileResource(env, "path", a.Path, a.writeArgs)
 }
 
 func newCopy(env module.Env, a copyArgs) (host.Resource, error) {
-	return fileResource(env, "dest", a.Dest, a.FileArgs)
+	return fileResource(env, "dest", a.Dest, a.writeArgs)
 }
 
 type dirArgs struct {
