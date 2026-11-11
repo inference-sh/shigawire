@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io/fs"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -80,39 +79,27 @@ func load(path string, opt playbook.Options) (*playbook.Playbook, error) {
 }
 
 func TestLoadNeedsRegistry(t *testing.T) {
-	path := write(t, t.TempDir(), "p.yml", "steps: []\n")
+	path := hosttest.WriteFile(t, t.TempDir(), "p.yml", "steps: []\n")
 	if _, err := playbook.Load(path, playbook.Options{}); err == nil || !strings.Contains(err.Error(), "Registry is nil") {
 		t.Fatalf("err %v", err)
 	}
 }
 
 func TestLoadUsesOnlyItsRegistry(t *testing.T) {
-	path := write(t, t.TempDir(), "p.yml", "steps:\n  - name: s\n    tasks:\n      - test.file: {path: /x, content: x}\n")
+	path := hosttest.WriteFile(t, t.TempDir(), "p.yml", "steps:\n  - name: s\n    tasks:\n      - test.file: {path: /x, content: x}\n")
 	if _, err := playbook.Load(path, playbook.Options{Registry: module.NewRegistry()}); err == nil || !strings.Contains(err.Error(), `unknown module "test.file"`) {
 		t.Fatalf("err %v", err)
 	}
 }
 
 // write writes content to dir/name and returns its path.
-func write(t *testing.T, dir, name, content string) string {
-	t.Helper()
-	p := filepath.Join(dir, name)
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return p
-}
-
 func env(h *hosttest.Host) module.Env { return module.NewEnv(h.Exec, h.Root) }
 
 // run loads the playbook in content and runs it with m.
 func run(t *testing.T, h *hosttest.Host, content string, opt playbook.Options, m func(*playbook.Playbook, context.Context, *host.Runner) error) ([]host.Result, error) {
 	t.Helper()
 	opt.Env = env(h)
-	pb, err := load(write(t, t.TempDir(), "site.yml", content), opt)
+	pb, err := load(hosttest.WriteFile(t, t.TempDir(), "site.yml", content), opt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,8 +115,8 @@ var (
 func TestVarsPrecedence(t *testing.T) {
 	h := hosttest.New(t)
 	dir := t.TempDir()
-	vf1 := write(t, dir, "a.yml", "B: file1\nC: file1\n")
-	vf2 := write(t, dir, "b.yml", "C: file2\n")
+	vf1 := hosttest.WriteFile(t, dir, "a.yml", "B: file1\nC: file1\n")
+	vf2 := hosttest.WriteFile(t, dir, "b.yml", "C: file2\n")
 	pb := `
 name: vars
 vars:
@@ -174,7 +161,7 @@ steps:
 	}
 	// Unquoted, a fraction goes where the module wants a string: an error,
 	// as if the fraction were written there (a whole number is its text).
-	_, err := load(write(t, t.TempDir(), "p.yml", "vars: {N: 7.5}\nsteps:\n  - name: s\n    tasks:\n      - test.file:\n          path: /m\n          content: ${N}\n"), playbook.Options{Env: env(h)})
+	_, err := load(hosttest.WriteFile(t, t.TempDir(), "p.yml", "vars: {N: 7.5}\nsteps:\n  - name: s\n    tasks:\n      - test.file:\n          path: /m\n          content: ${N}\n"), playbook.Options{Env: env(h)})
 	if err == nil || !strings.Contains(err.Error(), "p.yml:5:9: test.file: content: want a string, got a number") {
 		t.Fatal(err)
 	}
@@ -204,7 +191,7 @@ func TestLoadErrors(t *testing.T) {
 			`handler "a" needs itself`},
 		{"steps:\n  - name: s\n    tasks:\n      - test.cmd: {cmd: [x]}\n        register: r\n      - test.cmd: {cmd: [x]}\n        register: r\n", `p.yml:7:19: register "r": an earlier task registers that name`},
 	} {
-		_, err := load(write(t, t.TempDir(), "p.yml", c.yml), playbook.Options{Env: env(h)})
+		_, err := load(hosttest.WriteFile(t, t.TempDir(), "p.yml", c.yml), playbook.Options{Env: env(h)})
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s\nerr  %v\nwant %s", c.yml, err, c.want)
 		}
@@ -320,7 +307,7 @@ steps:
 `
 	h := hosttest.New(t)
 	opt := playbook.Options{Env: env(h), Only: []string{"three"}}
-	path := write(t, t.TempDir(), "p.yml", pb)
+	path := hosttest.WriteFile(t, t.TempDir(), "p.yml", pb)
 	// An excluded step's variables need no value.
 	p, err := load(path, opt)
 	if err != nil || strings.Join(p.Steps, ",") != "three" {
@@ -339,8 +326,8 @@ steps:
 func TestFilesAndModes(t *testing.T) {
 	h := hosttest.New(t)
 	dir := t.TempDir()
-	write(t, dir, "files/motd", "welcome\n")
-	path := write(t, dir, "site.yml", "name: f\nsteps:\n  - name: s\n    tasks:\n      - test.file: {path: /etc/motd, src: motd}\n      - test.fail:\n")
+	hosttest.WriteFile(t, dir, "files/motd", "welcome\n")
+	path := hosttest.WriteFile(t, dir, "site.yml", "name: f\nsteps:\n  - name: s\n    tasks:\n      - test.file: {path: /etc/motd, src: motd}\n      - test.fail:\n")
 	pb, err := load(path, playbook.Options{Env: env(h)})
 	if err != nil {
 		t.Fatal(err)
@@ -394,7 +381,7 @@ steps:
 func TestEnvVarsFile(t *testing.T) {
 	h := hosttest.New(t)
 	dir := t.TempDir()
-	envFile := write(t, dir, "domains.env", "# domains\nexport A=one\nB=\"two words\"\n\nC='${NOT_EXPANDED}'\nUNUSED=x\n")
+	envFile := hosttest.WriteFile(t, dir, "domains.env", "# domains\nexport A=one\nB=\"two words\"\n\nC='${NOT_EXPANDED}'\nUNUSED=x\n")
 	pb := `
 vars: {A: a, B: b, C: c}
 steps:
@@ -408,8 +395,8 @@ steps:
 	if got := h.Read("/out"); got != "one|two words|${NOT_EXPANDED}" {
 		t.Fatal(got)
 	}
-	bad := write(t, dir, "bad.env", "A=1\nnot a pair\n")
-	if _, err := load(write(t, dir, "p.yml", pb), playbook.Options{Env: env(h), VarFiles: []string{bad}}); err == nil || !strings.Contains(err.Error(), "bad.env:2: want NAME=VALUE") {
+	bad := hosttest.WriteFile(t, dir, "bad.env", "A=1\nnot a pair\n")
+	if _, err := load(hosttest.WriteFile(t, dir, "p.yml", pb), playbook.Options{Env: env(h), VarFiles: []string{bad}}); err == nil || !strings.Contains(err.Error(), "bad.env:2: want NAME=VALUE") {
 		t.Fatal(err)
 	}
 }
@@ -421,7 +408,7 @@ steps:
   - {name: risky, manual: true, tags: [firewall], tasks: [{test.file: {path: /2, content: "${KEY}"}}]}
 `
 	h := hosttest.New(t)
-	path := write(t, t.TempDir(), "p.yml", pb)
+	path := hosttest.WriteFile(t, t.TempDir(), "p.yml", pb)
 	// Left out of a full run: its variables need no value.
 	p, err := load(path, playbook.Options{Env: env(h)})
 	if err != nil || strings.Join(p.Steps, ",") != "one" {
@@ -433,7 +420,7 @@ steps:
 			t.Fatal(only, err, p)
 		}
 	}
-	if _, err := load(write(t, t.TempDir(), "p.yml", "steps: [{name: a, manual: yes, tasks: []}]"), playbook.Options{Env: env(h)}); err == nil || !strings.Contains(err.Error(), "manual: want true or false") {
+	if _, err := load(hosttest.WriteFile(t, t.TempDir(), "p.yml", "steps: [{name: a, manual: yes, tasks: []}]"), playbook.Options{Env: env(h)}); err == nil || !strings.Contains(err.Error(), "manual: want true or false") {
 		t.Fatal(err)
 	}
 }
@@ -458,14 +445,14 @@ steps:
 		t.Fatal(hosttest.Statuses(got), got[0].Msg, err)
 	}
 	// Set, the arguments are checked.
-	if _, err := load(write(t, t.TempDir(), "p.yml", pb), playbook.Options{Env: env(h), Set: map[string]string{"ON": "yes"}}); err == nil || !strings.Contains(err.Error(), "cmd is empty") {
+	if _, err := load(hosttest.WriteFile(t, t.TempDir(), "p.yml", pb), playbook.Options{Env: env(h), Set: map[string]string{"ON": "yes"}}); err == nil || !strings.Contains(err.Error(), "cmd is empty") {
 		t.Fatal(err)
 	}
 }
 
 func TestCheck(t *testing.T) {
 	dir := t.TempDir()
-	path := write(t, dir, "p.yml", `
+	path := hosttest.WriteFile(t, dir, "p.yml", `
 steps:
   - name: s
     tasks:

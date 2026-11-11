@@ -3,29 +3,20 @@ package simrun_test
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/inference-sh/shigawire/host"
+	"github.com/inference-sh/shigawire/host/hosttest"
 	"github.com/inference-sh/shigawire/internal/simrun"
 	"github.com/inference-sh/shigawire/module"
 	"github.com/inference-sh/shigawire/module/builtin"
 	"github.com/inference-sh/shigawire/playbook"
 )
 
-func write(t *testing.T, content string) string {
-	t.Helper()
-	p := filepath.Join(t.TempDir(), "site.yml")
-	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return p
-}
-
 func TestRunConverges(t *testing.T) {
-	p := write(t, `
+	p := hosttest.Playbook(t, `
 steps:
   - name: base
     tasks:
@@ -51,7 +42,7 @@ steps:
 
 func TestRunDoesNotConverge(t *testing.T) {
 	// The guard's file never appears: the command runs every time.
-	p := write(t, "steps:\n  - name: s\n    tasks:\n      - command: {cmd: make, creates: /opt/built}\n")
+	p := hosttest.Playbook(t, "steps:\n  - name: s\n    tasks:\n      - command: {cmd: make, creates: /opt/built}\n")
 	o, err := simrun.Run(context.Background(), p, playbook.Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -62,7 +53,7 @@ func TestRunDoesNotConverge(t *testing.T) {
 }
 
 func TestRunApplyFails(t *testing.T) {
-	p := write(t, "steps:\n  - name: s\n    tasks:\n      - fail: {msg: no}\n")
+	p := hosttest.Playbook(t, "steps:\n  - name: s\n    tasks:\n      - fail: {msg: no}\n")
 	o, err := simrun.Run(context.Background(), p, playbook.Options{})
 	if err != nil || o.Failed != simrun.StageApply || !strings.HasPrefix(o.Failure(), "apply: ") {
 		t.Fatalf("%v %s\n%s", err, o.Failed, o.Failure())
@@ -87,7 +78,7 @@ func TestRunVerifyDrifts(t *testing.T) {
 	reg := builtin.Registry()
 	var n atomic.Int32
 	reg.Register("late", func(module.Env, map[string]any) (host.Resource, error) { return lateDrift{&n}, nil })
-	p := write(t, "steps:\n  - name: s\n    tasks:\n      - late:\n")
+	p := hosttest.Playbook(t, "steps:\n  - name: s\n    tasks:\n      - late:\n")
 	o, err := simrun.Run(context.Background(), p, playbook.Options{Registry: reg})
 	if err != nil || o.Failed != simrun.StageVerify || !strings.Contains(o.Failure(), "changed  s: late: moved") {
 		t.Fatalf("%v %s\n%s", err, o.Failed, o.Failure())

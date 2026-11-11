@@ -24,7 +24,7 @@ func TestValidateReloadWithWhenPutsBack(t *testing.T) {
 		}
 		return host.Output{}
 	}
-	p := playbook(t, `
+	p := hosttest.Playbook(t, `
 name: t
 steps:
   - name: ssh
@@ -65,7 +65,7 @@ func TestModeAsWritten(t *testing.T) {
 		if c.vars != "" {
 			vars = "vars: " + c.vars
 		}
-		p := playbook(t, `
+		p := hosttest.Playbook(t, `
 name: t
 `+vars+`
 steps:
@@ -102,7 +102,7 @@ func TestRegisterLeavesOutGuards(t *testing.T) {
 	h := sim.New(t)
 	h.Write("/opt/.done", "")
 	h.Users["app"] = &sim.User{UID: os.Getuid(), GID: os.Getgid(), Home: "/home/app", Shell: "/bin/sh"}
-	p := playbook(t, `
+	p := hosttest.Playbook(t, `
 name: t
 steps:
   - name: s
@@ -135,7 +135,7 @@ steps:
 // A task that needs a task that failed is not checked: on a locked swarm
 // the plan does not report the network as one to create.
 func TestNeedsAFailedTask(t *testing.T) {
-	p := playbook(t, `
+	p := hosttest.Playbook(t, `
 name: t
 steps:
   - name: swarm
