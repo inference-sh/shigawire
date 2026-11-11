@@ -61,7 +61,7 @@ func newApt(env module.Env, a aptArgs) (host.Resource, error) {
 	case a.UpdateCache:
 		return nil, errors.New("update_cache with state " + state + ": an update is for an install")
 	}
-	return env.Apt.Remove(a.Name, state == "purged"), nil
+	return env.Apt.Remove(host.Names(a.Name...), state == "purged"), nil
 }
 
 type aptRepoArgs struct {
