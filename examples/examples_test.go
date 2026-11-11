@@ -2,12 +2,17 @@
 package examples
 
 import (
+	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/inference-sh/shigawire/host"
 	"github.com/inference-sh/shigawire/host/hosttest"
 	"github.com/inference-sh/shigawire/host/hosttest/sim"
+	"github.com/inference-sh/shigawire/module"
+	"github.com/inference-sh/shigawire/playbook"
 	"github.com/inference-sh/shigawire/shigatest"
 )
 
@@ -72,5 +77,50 @@ func TestWebNoKey(t *testing.T) {
 	}
 	if !h.Exists("/etc/nginx/sites-enabled/example.com") {
 		t.Fatal("no site")
+	}
+}
+
+// A site config nginx -t refuses is put back as it was before the run,
+// and nginx is not reloaded on it.
+func TestWebPutsBackABadConfig(t *testing.T) {
+	h := webHost(t)
+	vars := map[string]string{"DOMAIN": "shop.example.org"}
+	shigatest.RunOn(t, h.Host, "web/web.yml", vars)
+	site := "/etc/nginx/sites-available/shop.example.org"
+	good := h.Read(site)
+
+	// The same playbook with a directive nginx does not know.
+	b, err := os.ReadFile("web/web.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad := strings.Replace(string(b), "index index.html;", "index index.html;\n                bogus_directive on;", 1)
+	if bad == string(b) {
+		t.Fatal("no index line to add to")
+	}
+	path := filepath.Join(t.TempDir(), "web.yml")
+	if err := os.WriteFile(path, []byte(bad), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h.Fallback = func(c host.Cmd) host.Output {
+		if c.Name == "nginx" && strings.Contains(h.Read(site), "bogus_directive") {
+			return host.Output{Code: 1, Out: `[emerg] unknown directive "bogus_directive"`}
+		}
+		return host.Output{}
+	}
+	pb, err := shigatest.Load(h.Host, path, playbook.Options{Set: vars, Env: module.Env{Files: os.DirFS("web/files")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloads := h.Units["nginx"].Reloads
+	rs, err := shigatest.Results(context.Background(), pb.Apply)
+	if err == nil || !strings.Contains(err.Error(), "put back "+h.Path(site)) {
+		t.Fatalf("apply: %v\n%s", err, hosttest.Statuses(rs))
+	}
+	if got := h.Read(site); got != good {
+		t.Fatalf("site config not put back:\n%s", got)
+	}
+	if h.Units["nginx"].Reloads != reloads {
+		t.Fatal("nginx reloaded on a config nginx -t refused")
 	}
 }

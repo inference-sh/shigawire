@@ -79,10 +79,13 @@ steps:
       - name: nginx running
         systemd: {name: nginx, enabled: true, state: started}
     handlers:
+      # nginx -t before the reload; a config it refuses is put back as it
+      # was before the run, so the next reload or restart does not read it.
       - name: reload nginx
         validate_reload:
           validate: [nginx, -t, -q]
           service: nginx
+          restore: ["/etc/nginx/sites-available/${DOMAIN}"]
 
   - name: health
     when: mode == verify
