@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -17,8 +18,9 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-// Load reads the playbook at path and makes each task's resource with the
-// module it names. Every error names the file and line it is at.
+// Load reads the playbook at path, and the playbooks it includes (their
+// steps first), and makes each task's resource with the module it names.
+// Every error names the file and line it is at.
 func Load(path string, opt Options) (*Playbook, error) {
 	l, err := loadChecked(path, opt, nil)
 	if err != nil {
@@ -34,26 +36,8 @@ func loadChecked(path string, opt Options, chk *checkState) (*loader, error) {
 	if opt.Registry == nil {
 		return nil, errors.New("playbook: Options.Registry is nil (builtin.Registry() is the standard modules)")
 	}
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	var doc yaml.Node
-	if err := yaml.Unmarshal(b, &doc); err != nil {
-		return nil, yamlErr(path, err)
-	}
-	if len(doc.Content) == 0 {
-		return nil, fmt.Errorf("%s: empty playbook", path)
-	}
-	root := doc.Content[0]
-	if root.Kind != yaml.MappingNode {
-		return nil, errAt(path, root, "a playbook is a mapping with name, vars and steps")
-	}
 	if opt.Env.Files == nil {
-		dir := filepath.Join(filepath.Dir(path), "files")
-		if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
-			opt.Env.Files = os.DirFS(dir)
-		}
+		opt.Env.Files = filesDir(path)
 	}
 	l := &loader{
 		file:     path,
@@ -64,34 +48,41 @@ func loadChecked(path string, opt Options, chk *checkState) (*loader, error) {
 		chk:      chk,
 	}
 	l.pb = &Playbook{Path: path, records: l.records, facts: &factCache{env: opt.Env}}
-	var stepsNode, varsNode *yaml.Node
-	err = eachKey(path, root, func(k, v *yaml.Node) error {
-		switch k.Value {
-		case "name":
-			return scalar(path, v, &l.pb.Name)
-		case "vars":
-			varsNode = v
-		case "steps":
-			stepsNode = v
-		default:
-			return errAt(path, k, "unknown key %q (a playbook has name, vars and steps)", k.Value)
-		}
-		return nil
-	})
+	srcs, err := l.read(path, opt.Env, nil, map[string]bool{})
 	if err != nil {
 		return l, err
 	}
-	if l.vars, err = resolveVars(path, varsNode, opt); err != nil {
+	top := srcs[len(srcs)-1]
+	l.pb.Name = top.name
+	defaults := map[string]string{}
+	var hasSteps bool
+	for _, src := range srcs {
+		l.pb.Files = append(l.pb.Files, src.path)
+		if src.vars != nil {
+			if err := readVars(src.path, src.vars, defaults); err != nil {
+				return l, err
+			}
+		}
+		hasSteps = hasSteps || src.steps != nil
+	}
+	if l.vars, err = resolveVars(defaults, opt); err != nil {
 		return l, err
 	}
 	l.pb.Vars = l.vars
-	if stepsNode == nil {
-		return l, errAt(path, root, "no steps")
+	if !hasSteps {
+		return l, errAt(path, top.root, "no steps")
 	}
-	steps, err := l.parseSteps(stepsNode)
-	if err != nil {
-		return l, err
+	var steps []*stepDef
+	for _, src := range srcs {
+		if src.steps == nil {
+			continue
+		}
+		l.file, l.env = src.path, src.env
+		if steps, err = l.parseSteps(src.steps, steps); err != nil {
+			return l, err
+		}
 	}
+	l.file, l.env = path, opt.Env
 	if chk != nil {
 		for _, s := range steps {
 			s.selected = true
@@ -112,6 +103,119 @@ func loadChecked(path string, opt Options, chk *checkState) (*loader, error) {
 		}
 	}
 	return l, nil
+}
+
+// source is one file of a playbook: the playbook Load was given, or one
+// it includes.
+type source struct {
+	path string
+	root *yaml.Node
+	name string
+	vars *yaml.Node
+	// steps is nil when the file has no steps key.
+	steps *yaml.Node
+	// env is the Env of the file's tasks: its own files/ directory.
+	env module.Env
+}
+
+// filesDir is the files directory next to the playbook at path; nil when
+// there is none.
+func filesDir(path string) fs.FS {
+	dir := filepath.Join(filepath.Dir(path), "files")
+	if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
+		return os.DirFS(dir)
+	}
+	return nil
+}
+
+// fileKey is what tells two paths to one file apart from two files.
+func fileKey(path string) string {
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	if real, err := filepath.EvalSymlinks(path); err == nil {
+		path = real
+	}
+	return path
+}
+
+// read reads the playbook at path and, before it, the files it includes,
+// depth first, in the order of each include list: the sources in the
+// order their steps run, path's last. stack are the files including path
+// (a cycle names them); seen are the files read already, which a second
+// include of skips.
+func (l *loader) read(path string, env module.Env, stack []string, seen map[string]bool) ([]*source, error) {
+	key := fileKey(path)
+	seen[key] = true
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(b, &doc); err != nil {
+		return nil, yamlErr(path, err)
+	}
+	if len(doc.Content) == 0 {
+		return nil, fmt.Errorf("%s: empty playbook", path)
+	}
+	root := doc.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return nil, errAt(path, root, "a playbook is a mapping with name, include, vars and steps")
+	}
+	src := &source{path: path, root: root, env: env}
+	var include *yaml.Node
+	err = eachKey(path, root, func(k, v *yaml.Node) error {
+		switch k.Value {
+		case "name":
+			return scalar(path, v, &src.name)
+		case "include":
+			include = v
+		case "vars":
+			src.vars = v
+		case "steps":
+			src.steps = v
+		default:
+			return errAt(path, k, "unknown key %q (a playbook has name, include, vars and steps)", k.Value)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	var srcs []*source
+	if include != nil {
+		var paths []string
+		if err := scalars(path, include, &paths); err != nil {
+			return nil, err
+		}
+		stack = append(slices.Clip(stack), path)
+		for _, p := range paths {
+			if p == "" {
+				return nil, errAt(path, include, "include: an empty path")
+			}
+			if !filepath.IsAbs(p) {
+				p = filepath.Join(filepath.Dir(path), p)
+			}
+			k := fileKey(p)
+			if i := slices.IndexFunc(stack, func(s string) bool { return fileKey(s) == k }); i >= 0 {
+				return nil, errAt(path, include, "include %s: a cycle: %s -> %s", p, strings.Join(stack[i:], " -> "), p)
+			}
+			if seen[k] {
+				continue
+			}
+			if _, err := os.Stat(p); err != nil {
+				return nil, errAt(path, include, "include %s: %v", p, errors.Unwrap(err))
+			}
+			ienv := env
+			ienv.Files = filesDir(p)
+			more, err := l.read(p, ienv, stack, seen)
+			if err != nil {
+				return nil, err
+			}
+			srcs = append(srcs, more...)
+		}
+	}
+	return append(srcs, src), nil
 }
 
 type loader struct {
@@ -148,6 +252,9 @@ func (l *loader) fail(err error) error {
 
 type stepDef struct {
 	node *yaml.Node
+	// file and env are those of the playbook file the step is in.
+	file string
+	env  module.Env
 	name string
 	tags []string
 	// manual: the step runs only when --only names it or one of its tags.
@@ -160,21 +267,27 @@ type stepDef struct {
 
 type handlerDef struct {
 	node     *yaml.Node
+	file     string
+	env      module.Env
 	name     string
 	building bool
 	built    *host.Handler
 }
 
-func (l *loader) parseSteps(n *yaml.Node) ([]*stepDef, error) {
+// parseSteps reads the steps n lists, of l.file, after steps (those of
+// the files read before it).
+func (l *loader) parseSteps(n *yaml.Node, steps []*stepDef) ([]*stepDef, error) {
+	if n.Kind == yaml.ScalarNode && n.Tag == "!!null" {
+		return steps, nil
+	}
 	if n.Kind != yaml.SequenceNode {
 		return nil, errAt(l.file, n, "steps is a list")
 	}
-	var steps []*stepDef
 	for _, sn := range n.Content {
 		if sn.Kind != yaml.MappingNode {
 			return nil, errAt(l.file, sn, "a step is a mapping with name, tags, manual, when, tasks and handlers")
 		}
-		s := &stepDef{node: sn}
+		s := &stepDef{node: sn, file: l.file, env: l.env}
 		err := eachKey(l.file, sn, func(k, v *yaml.Node) error {
 			switch k.Value {
 			case "name":
@@ -196,7 +309,7 @@ func (l *loader) parseSteps(n *yaml.Node) ([]*stepDef, error) {
 					return err
 				}
 				for _, hn := range hs {
-					h := &handlerDef{node: hn}
+					h := &handlerDef{node: hn, file: l.file, env: l.env}
 					if err := l.handlerName(h); err != nil {
 						return err
 					}
@@ -214,7 +327,7 @@ func (l *loader) parseSteps(n *yaml.Node) ([]*stepDef, error) {
 			return nil, errAt(l.file, sn, "a step needs a name")
 		}
 		if i := slices.IndexFunc(steps, func(o *stepDef) bool { return o.name == s.name }); i >= 0 {
-			return nil, errAt(l.file, sn, "step %q: a step of that name is at line %d", s.name, steps[i].node.Line)
+			return nil, errAt(l.file, sn, "step %q: a step of that name is at %s", s.name, l.at(steps[i].file, steps[i].node))
 		}
 		steps = append(steps, s)
 	}
@@ -237,10 +350,19 @@ func (l *loader) handlerName(h *handlerDef) error {
 		return errAt(l.file, h.node, "a handler needs a name (tasks notify it by name)")
 	}
 	if o := l.handlers[h.name]; o != nil {
-		return errAt(l.file, h.node, "handler %q: a handler of that name is at line %d", h.name, o.node.Line)
+		return errAt(l.file, h.node, "handler %q: a handler of that name is at %s", h.name, l.at(o.file, o.node))
 	}
 	l.handlers[h.name] = h
 	return nil
+}
+
+// at is where n is, for a message about l.file: "line N" in l.file,
+// "file:N" in another.
+func (l *loader) at(file string, n *yaml.Node) string {
+	if file == l.file {
+		return fmt.Sprintf("line %d", n.Line)
+	}
+	return fmt.Sprintf("%s:%d", file, n.Line)
 }
 
 // selectSteps marks the steps only names (by name or tag); all of them
@@ -270,6 +392,9 @@ func (l *loader) buildStep(s *stepDef) error {
 	if l.registered == nil {
 		l.registered = map[string]*record{}
 	}
+	file, env := l.file, l.env
+	l.file, l.env = s.file, s.env
+	defer func() { l.file, l.env = file, env }()
 	if !s.selected {
 		for _, tn := range s.tasks {
 			if err := l.declareRegister(tn); err != nil {
@@ -563,7 +688,9 @@ func (l *loader) handler(hd *handlerDef) (*host.Handler, error) {
 		return nil, errAt(l.file, hd.node, "handler %q needs itself, through the handlers it needs", hd.name)
 	}
 	hd.building = true
-	defer func() { hd.building = false }()
+	file, env := l.file, l.env
+	l.file, l.env = hd.file, hd.env
+	defer func() { hd.building, l.file, l.env = false, file, env }()
 	p, err := l.parse(hd.node, "handler", handlerKeys)
 	if err != nil {
 		return nil, err

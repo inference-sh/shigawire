@@ -43,7 +43,8 @@ type Options struct {
 	// not in it does not load.
 	Registry *module.Registry
 	// Env is what the modules act through. When Files is nil, Load sets it
-	// to the files directory next to the playbook, when there is one.
+	// to the files directory next to the playbook, when there is one. The
+	// tasks of an included playbook get the files directory next to it.
 	Env module.Env
 	// Environ is the environment, as os.Environ gives it. Each
 	// SHIGA_VAR_NAME in it sets the variable NAME.
@@ -68,6 +69,9 @@ type Options struct {
 type Playbook struct {
 	Name string
 	Path string
+	// Files are the playbook files loaded, in the order their steps run:
+	// the included ones, then Path.
+	Files []string
 	// Steps are the names of the steps loaded, in order.
 	Steps []string
 	// Vars are the variables, resolved.

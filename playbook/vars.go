@@ -32,16 +32,12 @@ func validName(s string) bool {
 	return true
 }
 
-// resolveVars is the variables of a playbook whose vars mapping is defs,
-// from lowest to highest precedence: defs, the environment, each vars
-// file in order, then set.
-func resolveVars(file string, defs *yaml.Node, opt Options) (map[string]string, error) {
-	vars := map[string]string{}
-	if defs != nil {
-		if err := readVars(file, defs, vars); err != nil {
-			return nil, err
-		}
-	}
+// resolveVars is the variables of a playbook whose defaults (its vars and
+// those of the files it includes) are defaults, from lowest to highest
+// precedence: defaults, the environment, each vars file in order, then
+// set. defaults becomes the result.
+func resolveVars(defaults map[string]string, opt Options) (map[string]string, error) {
+	vars := defaults
 	for _, kv := range opt.Environ {
 		k, v, ok := strings.Cut(kv, "=")
 		if name, found := strings.CutPrefix(k, EnvPrefix); ok && found && validName(name) {

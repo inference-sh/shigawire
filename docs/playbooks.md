@@ -48,9 +48,10 @@ beside them ([modules.md](modules.md#registries)).
 
 | key     | value |
 |---------|-------|
-| `name`  | The playbook's name. Optional. |
-| `vars`  | Default values of variables: a mapping of names to single values. |
-| `steps` | The steps, in order. Required. |
+| `name`    | The playbook's name. Optional. |
+| `include` | A path or a list of paths of other playbooks whose steps run before this one's ([Includes](#includes)). |
+| `vars`    | Default values of variables: a mapping of names to single values. |
+| `steps`   | The steps, in order. Required, unless an included playbook has them. |
 
 Any other key is an error.
 
@@ -100,6 +101,46 @@ A handler is a mapping with one module key and:
 
 A step's `when` does not apply to its handlers: a handler only runs when a
 task that ran notified it.
+
+## Includes
+
+`include` makes several playbook files one play. Each path is relative
+to the file that includes it (or absolute); the included file is a
+playbook with the same keys, `include` too.
+
+```yaml
+# web.yml
+name: web
+include: [common/host.yml]
+vars:
+  SSH_FROM: 10.0.0.0/8
+steps:
+  - name: nginx
+    tasks:
+      - apt: {name: nginx}
+```
+
+- **Order.** The included files' steps run first, in the order of the
+  list, each file's own includes before it; then the file's own steps.
+- **Once.** A file reached through two includes (two paths to the same
+  file, symlinks resolved) loads once, where it is first reached.
+- **Errors.** A missing file, or a file that includes itself through
+  any chain, does not load: the error names the include's file and
+  line, and the chain of a cycle.
+- **Names.** Step names, handler names and `register` names are the
+  play's: one used in two files is an error naming both. A task may
+  notify a handler, read a result or `needs` a task of another file,
+  as within one file.
+- **Variables.** Each file's `vars` are defaults, read in the order the
+  steps run: an including file's value wins over an included one's, and
+  a later include's over an earlier one's. `--vars`, the environment and
+  `--var` are over all of them, as for one file.
+- **Files.** A task's `src` (and `apt_repo`'s `key_src`) is in the
+  `files/` directory next to the file the task is in.
+- **The play.** `name` is the top file's; the others' are ignored.
+  `plan`, `apply`, `verify`, `check`, `test` and `--only` see every
+  step of every file. `Playbook.Files` lists the files loaded, in step
+  order.
 
 ## Variables
 
@@ -241,7 +282,8 @@ query such as `assert`) gives `rc` and `stdout` in every mode.
 
 A directory named `files` next to the playbook is the playbook's files.
 A module argument that names one with a relative path
-(`src: compose.yml`) reads it from there, when the playbook loads.
+(`src: compose.yml`) reads it from there, when the playbook loads. A
+task of an included playbook reads from the `files` next to its own file.
 
 ## Errors
 

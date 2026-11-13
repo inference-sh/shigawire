@@ -74,29 +74,42 @@ func Check(path string, opt Options) Report {
 		rep.Steps, rep.Tasks = len(l.pb.Steps), l.tasks
 	}
 	rep.Problems = chk.problems
-	// In the order of the file: a handler is built when a task first
-	// notifies it, after the tasks before that one.
+	order := []string{path}
+	if l != nil && len(l.pb.Files) > 0 {
+		order = l.pb.Files
+	}
+	// In the order of the files, as their steps run, and of the lines in
+	// each: a handler is built when a task first notifies it, after the
+	// tasks before that one.
 	slices.SortStableFunc(rep.Problems, func(a, b error) int {
-		la, ca := position(path, a)
-		lb, cb := position(path, b)
-		return cmp.Or(cmp.Compare(la, lb), cmp.Compare(ca, cb))
+		fa, la, ca := position(order, a)
+		fb, lb, cb := position(order, b)
+		return cmp.Or(cmp.Compare(fa, fb), cmp.Compare(la, lb), cmp.Compare(ca, cb))
 	})
 	return rep
 }
 
-// position is the line and column at the start of err's message, when it
-// is "path:line[:col]: ..."; 0, 0 otherwise.
-func position(path string, err error) (line, col int) {
-	rest, ok := strings.CutPrefix(err.Error(), path+":")
-	if !ok {
-		return 0, 0
+// position is the index in files of the file at the start of err's
+// message, and the line and column after it, when it is
+// "file:line[:col]: ..."; -1, 0, 0 otherwise.
+func position(files []string, err error) (file, line, col int) {
+	file = -1
+	var rest string
+	for i, f := range files {
+		if r, ok := strings.CutPrefix(err.Error(), f+":"); ok {
+			file, rest = i, r
+			break
+		}
+	}
+	if file < 0 {
+		return -1, 0, 0
 	}
 	parts := strings.SplitN(rest, ":", 3)
 	line, _ = strconv.Atoi(parts[0])
 	if len(parts) > 1 {
 		col, _ = strconv.Atoi(parts[1])
 	}
-	return line, col
+	return file, line, col
 }
 
 // checkState is what Check keeps while the loader runs.

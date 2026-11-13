@@ -93,6 +93,7 @@ A playbook is a list of **steps**. A step holds **tasks**, and each task names o
 - **Conditions:** `when: os.id == ubuntu`, `when: ${ENABLE_TLS}`, `when: docker.rc != 0` on a result saved with `register: docker`.
 - **Dependencies:** `needs: swarm` on a task that reads what the task registered as `swarm` puts in place. When that one failed, this one is not checked: plan and verify report it unknown with the reason, and apply fails it.
 - **Selecting steps:** `--only firewall,nginx` by name or tag. A step marked `manual` runs only when selected.
+- **Includes:** `include: [../common/base.yml]` puts another playbook's steps before this one's, its `vars` under this one's. Paths are relative to the including file; a file reached twice loads once.
 
 There are no templates and no loops, on purpose. A full example is in [examples/web](examples/web). The format reference is [docs/playbooks.md](docs/playbooks.md).
 
