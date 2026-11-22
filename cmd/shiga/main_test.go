@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io/fs"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -18,6 +19,15 @@ type fileArgs struct {
 	Path    string `yaml:"path" doc:"the file's path"`
 	Content string `yaml:"content"`
 }
+
+// denied fails as reading a root-only file does without root.
+type denied struct{}
+
+func (denied) ID() string { return "denied" }
+func (denied) Check(context.Context) (host.State, error) {
+	return host.State{}, &fs.PathError{Op: "open", Path: "/etc/ufw/user.rules", Err: fs.ErrPermission}
+}
+func (denied) Apply(context.Context, host.State) (host.Result, error) { return host.Result{}, nil }
 
 type failing struct{}
 
@@ -35,6 +45,7 @@ func testRegistry() *module.Registry {
 		return &host.File{Path: env.Path(a.Path), Content: []byte(a.Content), Parents: true}, nil
 	}))
 	r.Register("test.fail", func(module.Env, map[string]any) (host.Resource, error) { return failing{}, nil })
+	r.Register("test.denied", func(module.Env, map[string]any) (host.Resource, error) { return denied{}, nil })
 	return r
 }
 
@@ -377,5 +388,46 @@ func TestTestCommand(t *testing.T) {
 	}
 	if code := x.run("test", hosttest.Playbook(t, "steps: [\n")); code != exitFailed || x.stderr.Len() == 0 {
 		t.Fatal(code, x.stderr)
+	}
+}
+
+// A task the OS refused, run as another user than root: stderr says to run
+// shiga as root. As root, or for other failures, it says nothing more.
+func TestNotRootHint(t *testing.T) {
+	x := newHarness(t)
+	pb := hosttest.Playbook(t, "steps:\n  - name: s\n    tasks:\n      - test.denied:\n      - test.denied:\n")
+	x.c.euid = func() int { return 1000 }
+	if code := x.run("plan", pb); code != exitFailed {
+		t.Fatal(code)
+	}
+	want := "shiga: 2 tasks were denied permission: shiga runs as uid 1000, and most tasks read or change what only root may. Run it as root: sudo shiga plan ...\n"
+	if x.stderr.String() != want {
+		t.Fatalf("stderr %q\nwant %q", x.stderr, want)
+	}
+	x.c.euid = func() int { return 0 }
+	if x.run("plan", pb); strings.Contains(x.stderr.String(), "sudo") {
+		t.Fatalf("as root: %q", x.stderr)
+	}
+	x.c.euid = func() int { return 1000 }
+	fail := hosttest.Playbook(t, "steps:\n  - name: s\n    tasks:\n      - test.fail:\n")
+	if x.run("plan", fail); strings.Contains(x.stderr.String(), "sudo") {
+		t.Fatalf("other failure: %q", x.stderr)
+	}
+}
+
+func TestPermissionDenied(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want bool
+	}{
+		{nil, false},
+		{errors.New("broken"), false},
+		{&fs.PathError{Op: "open", Path: "/x", Err: fs.ErrPermission}, true},
+		{errors.New("ufw: ERROR: You need to be root to run this script"), true},
+		{errors.New("mkdir /var/lib/x: operation not permitted"), true},
+	} {
+		if got := permissionDenied(tc.err); got != tc.want {
+			t.Errorf("%v: %v, want %v", tc.err, got, tc.want)
+		}
 	}
 }

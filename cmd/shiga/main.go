@@ -13,9 +13,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/signal"
 	"runtime/debug"
@@ -42,6 +44,7 @@ func main() {
 		environ: os.Environ(),
 		env:     module.NewEnv(exec, ""),
 		reg:     builtin.Registry(),
+		euid:    os.Geteuid,
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	code := c.main(ctx, os.Args[1:])
@@ -103,6 +106,8 @@ type cli struct {
 	env            module.Env
 	// reg is the modules a playbook may name.
 	reg *module.Registry
+	// euid is the effective user ID (os.Geteuid; nil: root, so no hint).
+	euid func() int
 }
 
 func (c *cli) main(ctx context.Context, args []string) int {
@@ -205,9 +210,12 @@ func (c *cli) run(ctx context.Context, cmd string, args []string) int {
 	// A plan's unknowns: stuck are those apply fails at whatever runs
 	// before them (Result.Blocked); waiting may depend on a change before
 	// them, which the plan cannot tell.
-	var waiting, stuck int
+	var waiting, stuck, denied int
 	r := &host.Runner{OnResult: func(rr host.Result) {
 		counts[rr.Status]++
+		if permissionDenied(rr.Err) {
+			denied++
+		}
 		switch {
 		case rr.Blocked:
 			stuck++
@@ -226,6 +234,10 @@ func (c *cli) run(ctx context.Context, cmd string, args []string) int {
 		runErr = pb.Verify(ctx, r)
 	}
 	c.summary(cmd, counts)
+	if denied > 0 && c.euid != nil && c.euid() != 0 {
+		fmt.Fprintf(c.stderr, "shiga: %d %s denied permission: shiga runs as uid %d, and most tasks read or change what only root may. Run it as root: sudo shiga %s ...\n",
+			denied, plural(denied, "task was", "tasks were"), c.euid(), cmd)
+	}
 	if cmd == "plan" {
 		if waiting > 0 {
 			fmt.Fprintf(c.stdout, "%d unknown: checks that may depend on changes planned before them, which apply makes first\n", waiting)
@@ -251,6 +263,20 @@ func (c *cli) run(ctx context.Context, cmd string, args []string) int {
 		return exitChanged
 	}
 	return exitOK
+}
+
+// permissionDenied is true for an error from the OS refusing access (EACCES,
+// EPERM), wrapped or only in the text a command printed.
+func permissionDenied(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, fs.ErrPermission) {
+		return true
+	}
+	m := strings.ToLower(err.Error())
+	return strings.Contains(m, "permission denied") || strings.Contains(m, "operation not permitted") ||
+		strings.Contains(m, "need to be root")
 }
 
 // parseInterspersed parses fs's flags wherever they are among args, and
